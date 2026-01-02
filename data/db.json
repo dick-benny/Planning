@@ -1,0 +1,22 @@
+[
+  {
+    "email": "a@ex.se",
+    "company": "Alpha",
+    "country": "Sverige"
+  },
+  {
+    "email": "b@ex.se",
+    "company": "Beta",
+    "country": "Sverige"
+  },
+  {
+    "email": "dick.erixon56@gmail.com",
+    "company": "Digital",
+    "country": "Sverige"
+  },
+  {
+    "email": "testfel",
+    "company": "Ftg1",
+    "country": "USA"
+  }
+]

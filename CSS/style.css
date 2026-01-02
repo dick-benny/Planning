@@ -1,0 +1,227 @@
+:root{
+  --bg: #f6f6f6;
+  --card: #ffffff;
+  --text: #1f1f1f;
+  --muted: #6f6f6f;
+  --border: #e6e6e6;
+  --radius: 10px;
+  --shadow: 0 10px 30px rgba(0,0,0,0.08);
+}
+
+*{ box-sizing: border-box; }
+
+body{
+  margin: 0;
+  font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+}
+
+/* ✅ Header: logo vänster, rubrik till höger */
+.top{
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 18px 22px 10px;
+}
+
+/* ✅ Monogrammet 25%: välj storlek här */
+.logo{
+  width: 56px;  /* ändra till 48px om du vill ännu mindre */
+  height: auto;
+  display: block;
+}
+
+.title{
+  margin: 0;
+  font-weight: 500;
+  font-size: 28px;
+}
+
+.content{
+  padding: 10px 22px 28px;
+  max-width: 900px;
+}
+
+.panel{
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 18px;
+}
+
+/* Upload-rad */
+.button-row{
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.file-name{
+  color: var(--muted);
+  font-size: 14px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 520px;
+}
+
+/* View/Save kolumn */
+.button-col{
+  display: grid;
+  gap: 14px;
+  margin-top: 18px;
+  max-width: 260px;
+}
+
+.status{
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+/* Buttons */
+.btn{
+  border: 1px solid var(--border);
+  background: var(--card);
+  padding: 12px 16px;
+  border-radius: 999px;
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+}
+
+.btn.primary{
+  background: var(--text);
+  border-color: var(--text);
+  color: #fff;
+}
+
+.btn.ghost{
+  background: var(--card);
+}
+
+.btn.icon{
+  border-radius: 10px;
+  padding: 10px 12px;
+  min-height: 40px;
+}
+
+.btn:hover{ filter: brightness(0.98); }
+
+/* ✅ Denna MÅSTE finnas för att View/Save ska döljas */
+.hidden{ display: none !important; }
+
+/* File input göms men finns kvar i label-knappen */
+.file-input{
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  overflow: hidden;
+}
+
+/* ✅ Modal */
+.modal{
+  position: fixed;
+  inset: 0;
+  z-index: 999;
+}
+
+.modal__backdrop{
+  position: absolute;
+  inset: 0;
+  background: rgba(0,0,0,0.35);
+}
+
+.modal__panel{
+  position: relative;
+  width: min(1100px, calc(100% - 28px));
+  max-height: calc(100% - 28px);
+  margin: 14px auto;
+  background: var(--card);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  border: 1px solid var(--border);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.modal__header{
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 14px 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.modal__title{
+  margin: 0;
+  font-weight: 600;
+  font-size: 16px;
+}
+
+.meta{
+  padding: 10px 14px;
+  color: var(--muted);
+  font-size: 13px;
+  border-bottom: 1px solid var(--border);
+}
+
+/* Table styling */
+.table-wrap{
+  padding: 0;
+  overflow: auto;
+  flex: 1;
+}
+
+.table{
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 700px;
+}
+
+.table th,
+.table td{
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  font-size: 14px;
+  vertical-align: top;
+}
+
+.table th{
+  position: sticky;
+  top: 0;
+  background: #fff;
+  color: var(--muted);
+  font-weight: 600;
+  z-index: 1;
+}
+
+.table tr:hover td{
+  background: #fafafa;
+}
+
+.cell-empty{
+  color: var(--muted);
+  font-style: italic;
+}
+
+/* Mobil */
+@media (max-width: 640px){
+  .title{ font-size: 22px; }
+  .button-row{ flex-direction: column; align-items: flex-start; }
+  .file-name{ max-width: 100%; }
+  .button-col{ max-width: 100%; }
+  .table{ min-width: 0; }
+}
+/* Markerar rader som är nya (finns i Excel men inte i DB) */
+.row-new td{
+  background: #fff7e6;
+}

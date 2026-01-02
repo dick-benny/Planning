@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="sv">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>CDM Prospect manager</title>
+
+  <!-- ✅ CSS -->
+  <link rel="stylesheet" href="CSS/style.css" />
+</head>
+
+<body>
+  <!-- ✅ Header: monogram vänster, rubrik till höger -->
+  <header class="top">
+    <img class="logo" src="images/monogram.png" alt="Monogram" />
+    <h1 class="title">CDM Prospect manager</h1>
+  </header>
+
+  <main class="content">
+    <!-- ✅ Upload-rad -->
+    <section class="panel">
+      <div class="button-row">
+        <label class="btn primary">
+          <input id="fileInput" class="file-input" type="file" accept=".xlsx" />
+          Upload
+        </label>
+        <div id="fileName" class="file-name">Ingen fil vald</div>
+      </div>
+
+      <!-- ✅ View/Save: dolda från start -->
+      <div class="button-col">
+        <button id="btnView" class="btn ghost hidden" type="button">View</button>
+        <button id="btnSave" class="btn ghost hidden" type="button">Save</button>
+        <div id="status" class="status"></div>
+      </div>
+    </section>
+  </main>
+
+  <!-- ✅ Modal / Popup (innehållet ska visas här, inte på sidan) -->
+  <div id="modal" class="modal hidden" aria-hidden="true">
+    <div class="modal__backdrop" data-close="true"></div>
+
+    <div class="modal__panel" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+      <div class="modal__header">
+        <h2 id="modalTitle" class="modal__title">Excel-innehåll</h2>
+        <button id="btnClose" class="btn icon" type="button" aria-label="Stäng">✕</button>
+      </div>
+
+      <div id="excelMeta" class="meta"></div>
+
+      <!-- ✅ Tabellen renderas hit -->
+      <div id="excelTable" class="table-wrap"></div>
+    </div>
+  </div>
+
+  <!-- ✅ 1) SheetJS måste laddas FÖRE app.js -->
+  <script src="libs/xlsx.full.min.js"></script>
+
+  <!-- ✅ 2) Din kod -->
+  <script src="JS/app.js"></script>
+</body>
+</html>
