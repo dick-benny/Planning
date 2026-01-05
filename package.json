@@ -3,7 +3,7 @@
     "express": "^5.2.1",
     "xlsx": "^0.18.5"
   },
-  "name": "vs-code-excel",
+  "name": "vs-code-design-spec",
   "version": "1.0.0",
   "description": "",
   "main": "server.js",
