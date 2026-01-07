@@ -1,261 +1,587 @@
+/* =========================
+   Design Spec – styles
+========================= */
 :root{
   --bg:#0b0c10;
   --text:#e9e9ef;
   --muted:#a9a9b6;
-  --line:rgba(255,255,255,.08);
-  --accent:#5c7cfa;
-  --accent2:#7c3aed;
-  --shadow: 0 12px 30px rgba(0,0,0,.35);
+  --line:rgba(255,255,255,.12);
+  --card:rgba(255,255,255,.06);
+  --card2:rgba(255,255,255,.08);
+  --accent:#6d5efc;
+  --accent2:#4f8cff;
+  --danger:#ff6b6b;
+  --ok:#22c55e;
   --radius:16px;
-  --font: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial;
-  --rowHover: rgba(255,255,255,.02);
+  --font:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Inter,Arial;
 }
 
-*{box-sizing:border-box}
-html,body{height:100%}
+*{ box-sizing:border-box; }
+html,body{ height:100%; }
 body{
   margin:0;
   font-family:var(--font);
-  background: radial-gradient(1200px 500px at 30% -10%, rgba(92,124,250,.25), transparent 60%),
-              radial-gradient(900px 450px at 90% 10%, rgba(124,58,237,.18), transparent 55%),
-              var(--bg);
+  background:radial-gradient(1200px 600px at 70% -20%, #2a1f4a, #05070d 60%);
   color:var(--text);
 }
 
-.muted{color:var(--muted)}
-
+/* Topbar */
 .topbar{
-  position:sticky;
-  top:0;
-  z-index:10;
   display:flex;
   align-items:center;
   justify-content:space-between;
   padding:14px 18px;
-  border-bottom:1px solid var(--line);
-  background:rgba(10,11,16,.88);
-  backdrop-filter: blur(12px);
+  border-bottom:1px solid rgba(255,255,255,.08);
+  background:linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,0));
 }
 
-.brand{display:flex;align-items:center;gap:12px}
+.brand{ display:flex; align-items:center; gap:12px; }
 .logo{
-  width:34px;height:34px;display:grid;place-items:center;
-  border-radius:12px;font-weight:900;
-  background:linear-gradient(135deg, rgba(92,124,250,.9), rgba(124,58,237,.9));
-  box-shadow: 0 8px 18px rgba(92,124,250,.25);
+  width:34px; height:34px; border-radius:10px;
+  display:flex; align-items:center; justify-content:center;
+  font-weight:900;
+  background:linear-gradient(135deg,var(--accent2),var(--accent));
 }
-.brand-title{font-weight:900}
-.brand-subtitle{font-size:12px;color:var(--muted);margin-top:2px}
+.brand-title{ font-weight:900; }
+.brand-sub{ font-size:12px; opacity:.7; margin-top:2px; }
 
 .tabs{
-  display:flex;gap:8px;padding:6px;
-  border:1px solid var(--line);
-  border-radius:999px;background:rgba(255,255,255,.03);
+  display:flex;
+  gap:6px;
+  padding:6px;
+  background:rgba(255,255,255,.06);
+  border:1px solid rgba(255,255,255,.10);
+  border-radius:999px;
 }
 .tab{
-  border:none;background:transparent;color:var(--muted);
-  font-weight:800;font-size:13px;padding:10px 14px;border-radius:999px;cursor:pointer;
+  border:none;
+  background:transparent;
+  color:rgba(255,255,255,.72);
+  padding:10px 14px;
+  border-radius:999px;
+  cursor:pointer;
+  font-weight:800;
 }
-.tab:hover{color:var(--text); background:rgba(255,255,255,.04)}
 .tab.is-active{
-  color:var(--text);
-  background:rgba(92,124,250,.22);
-  border:1px solid rgba(92,124,250,.5);
+  background:linear-gradient(135deg,var(--accent2),var(--accent));
+  color:#fff;
 }
 
-.top-actions{display:flex;gap:10px}
-.icon-btn{
-  width:34px;height:34px;border-radius:12px;
-  border:1px solid rgba(255,255,255,.12);
-  background:rgba(255,255,255,.04);
-  color:var(--text);cursor:pointer;font-weight:800;
-}
-.icon-btn:hover{background:rgba(255,255,255,.06)}
-
-.page{max-width:1200px;margin:0 auto;padding:22px 18px 60px}
-
-.hero{display:flex;align-items:flex-end;justify-content:space-between;margin-bottom:14px}
-.hero h1{margin:0;font-size:28px}
-.hero-actions{display:flex;gap:10px;flex-wrap:wrap}
-
-.btn{
-  border:none;border-radius:999px;padding:10px 14px;
-  font-weight:900;cursor:pointer;font-size:13px;
-}
-.btn-primary{
-  background:linear-gradient(135deg, rgba(92,124,250,.95), rgba(124,58,237,.95));
-  color:white;box-shadow: 0 12px 22px rgba(92,124,250,.18);
-}
-.btn-secondary{
+.top-actions{ display:flex; align-items:center; gap:10px; }
+.userpill{
+  display:flex;
+  gap:8px;
+  align-items:center;
+  padding:8px 12px;
+  border-radius:999px;
   background:rgba(255,255,255,.06);
-  color:var(--text);
-  border:1px solid rgba(255,255,255,.12);
-}
-.btn:hover{filter:brightness(1.05)}
-
-.card{
-  border:1px solid var(--line);
-  background:linear-gradient(180deg, rgba(255,255,255,.03), rgba(255,255,255,.015));
-  border-radius:var(--radius);
-  box-shadow:var(--shadow);
-  overflow:hidden;
-}
-
-.table-wrap{width:100%;overflow:auto}
-table{width:100%;border-collapse:collapse;min-width:1050px}
-
-thead th{
-  text-align:left;font-size:12px;letter-spacing:.2px;
-  color:var(--muted);font-weight:900;
-  padding:14px 14px;border-bottom:1px solid var(--line);
-  background:rgba(255,255,255,.02);
-  position:sticky;top:0;z-index:1;
-}
-
-tbody td{
-  padding:12px 14px;border-bottom:1px solid rgba(255,255,255,.06);
+  border:1px solid rgba(255,255,255,.10);
+  font-weight:800;
   font-size:13px;
 }
-tbody tr:hover td{background:rgba(255,255,255,.02)}
-tbody tr.is-expanded td{background:rgba(92,124,250,.06)}
+.userpill .role{ opacity:.7; font-weight:800; }
 
-.col-check{width:44px}
-.col-expand{width:44px}
-
-.po-check{
-  width:18px;height:18px;
-  accent-color: var(--accent);
+/* Buttons */
+.btn, .pill, .icon-btn{
+  border:none;
   cursor:pointer;
-}
-
-.shipping{
-  max-width:280px;
-  white-space: pre-line;
-}
-
-.pdf-cell{width:120px}
-.pdf-icon{
-  border:1px solid rgba(255,255,255,.14);
-  background:rgba(255,255,255,.04);
-  color:var(--text);
-  border-radius:12px;
   font-weight:900;
-  font-size:12px;
+  color:#fff;
+}
+.btn{
+  border-radius:999px;
+  padding:12px 18px;
+  background:rgba(255,255,255,.08);
+  border:1px solid rgba(255,255,255,.12);
+}
+.btn:hover{ background:rgba(255,255,255,.12); }
+.btn-primary{
+  background:linear-gradient(135deg,var(--accent2),var(--accent));
+  border:none;
+}
+.btn-primary:hover{ filter:brightness(1.05); }
+.btn-secondary{ background:rgba(255,255,255,.08); }
+
+.pill{
+  border-radius:999px;
+  padding:10px 14px;
+  background:rgba(255,255,255,.08);
+  border:1px solid rgba(255,255,255,.12);
+}
+.pill:hover{ background:rgba(255,255,255,.12); }
+.pill-accent{
+  background:linear-gradient(135deg,#22c55e,#16a34a);
+  border:none;
+}
+.pill-danger{
+  background:rgba(255,107,107,.18);
+  border:1px solid rgba(255,107,107,.35);
+  color:#ffd3d3;
+}
+.pill:disabled, .btn:disabled{
+  opacity:.45;
+  cursor:not-allowed;
+}
+
+.icon-btn{
   padding:8px 10px;
-  cursor:pointer;
+  border-radius:999px;
+  background:rgba(255,255,255,.08);
+  border:1px solid rgba(255,255,255,.12);
 }
-.pdf-icon:hover{background:rgba(255,255,255,.06)}
+.icon-btn:hover{ background:rgba(255,255,255,.12); }
 
-.detail-row td{
-  padding:0;
-  border-bottom:1px solid rgba(255,255,255,.06);
-  background:rgba(255,255,255,.01);
-}
-
-.action-btn{
-  padding:8px 10px;border-radius:999px;
-  border:1px solid rgba(92,124,250,.5);
-  background:rgba(92,124,250,.16);
-  color:var(--text);
-  font-size:12px;font-weight:800;cursor:pointer;
-}
-.action-btn:disabled{opacity:.45;cursor:not-allowed}
-
-.po-actions-cell{text-align:right;white-space:nowrap}
-
-.variant-table{
-  width:100%;
-  border-radius:14px;
-  overflow:hidden;
-  border:1px solid rgba(255,255,255,.10);
-  background:rgba(0,0,0,.18);
-  margin:12px 14px 16px;
-}
-
-.variant-head, .variant-row{
-  display:grid;
-  /* SKU | Name | Category | ERD(date) | Notes | Actions */
-  grid-template-columns: 140px 1fr 120px 200px 90px 110px;
-  gap:10px;
-  padding:10px 12px;
+/* Page header row */
+.hero{
+  display:flex;
   align-items:center;
+  justify-content:space-between;
+  padding:22px 24px;
+  border-bottom:1px solid rgba(255,255,255,.08);
+  background:linear-gradient(90deg, rgba(255,255,255,.04), rgba(255,255,255,0));
+}
+.hero h1{ margin:0; font-size:30px; }
+.hero-actions{ display:flex; gap:12px; }
+
+/* Tables */
+.table-wrap{ padding:18px 24px 36px; }
+.table{
+  width:100%;
+  border-collapse:collapse;
+}
+.table thead th{
+  text-align:left;
+  font-size:13px;
+  opacity:.72;
+  padding:10px 8px;
+}
+.table tbody td{
+  padding:12px 8px;
+  border-top:1px solid rgba(255,255,255,.06);
+  vertical-align:top;
+}
+.table .col-check{ width:40px; }
+.table .col-expand{ width:44px; }
+
+.shipping{ white-space:pre-line; }
+
+/* PO-rad när den är expanderad */
+tr.is-expanded{
+  background:#e6e6e6;
+}
+
+tr.is-expanded td{
+  color:#111;
+}
+/* Variant-del när PO är expanderad */
+tr.is-expanded + tr .details{
+  background:#e6e6e6;
+  padding:12px;
+  border-radius:0 0 12px 12px;
+}
+/* Variant-rader – ökad läsbarhet */
+tr.is-expanded + tr .variant-row{
+  background:#f4f4f4;
+  border-radius:8px;
+  margin:4px 0;
+}
+
+/* Variant-rubrik något mörkare än bakgrunden */
+tr.is-expanded + tr .variant-head{
+  background:#ededed;
+  border-radius:6px;
+  margin-bottom:6px;
+}
+/* ===== Variantdelen: bättre text-kontrast när PO är expanderad ===== */
+
+/* Bas: hela variantytan får mörk text */
+tr.is-expanded + tr .details{
+  color:#111;
+}
+
+/* Rubrikrad: mörkare text + tydligare bakgrund */
+tr.is-expanded + tr .variant-head{
+  color:#111;
+  opacity:1;               /* tar bort "blek rubrik" */
+  font-weight:900;
+  background:#ededed;
+  border-radius:8px;
+  padding:10px 10px;
+}
+
+/* Variantrader: mörk text + tydlig bakgrund */
+tr.is-expanded + tr .variant-row{
+  color:#111;
+  background:#f4f4f4;
+  border-radius:8px;
+  margin:6px 0;
+}
+
+/* Linjer mellan celler/rader: lite tydligare */
+tr.is-expanded + tr .variant-row{
+  border-bottom:1px solid #d6d6d6;
+}
+tr.is-expanded + tr .variant-row:last-child{
+  border-bottom:none;
+}
+
+/* Inputs i variantdelen: vit bakgrund + mörk text */
+tr.is-expanded + tr .input{
+  background:#fff;
+  color:#111;
+  border:1px solid #cfcfcf;
+}
+
+/* PDF-ikonen: mer synlig på ljus bakgrund */
+tr.is-expanded + tr .pdf-icon{
+  background:#fff;
+  border-color:#cfcfcf;
+}
+tr.is-expanded + tr .pdf-icon.has-file{
+  background:#dfe7ff;      /* mild blå hint när fil finns */
+  border-color:#98b1ff;
+}
+/* =========================================================
+   Variant-del – maximal läsbarhet när PO är expanderad
+   ========================================================= */
+
+/* PO-rad + variant-ytan */
+tr.is-expanded{
+  background:#e6e6e6;
+}
+tr.is-expanded td{
+  color:#111;
+}
+
+/* Hela variant-delen */
+tr.is-expanded + tr .details{
+  background:#e6e6e6;
+  padding:12px;
+  color:#111;
+}
+
+/* Variant-rubrik */
+tr.is-expanded + tr .variant-head{
+  background:#ededed;
+  color:#111;
+  opacity:1;              /* tar bort blek rubrik */
+  font-weight:900;
+  border-radius:8px;
+  padding:10px 10px;
+  margin-bottom:8px;
+}
+
+/* Variantrader */
+tr.is-expanded + tr .variant-row{
+  background:#f4f4f4;
+  color:#111;
+  border-radius:8px;
+  margin:6px 0;
+  padding:10px;
+}
+
+/* Hover på variantrad (valbar feedback) */
+tr.is-expanded + tr .variant-row:hover{
+  background:#eeeeee;
+}
+
+/* Inputs i variantdelen */
+tr.is-expanded + tr .input{
+  background:#ffffff;
+  color:#111;
+  border:1px solid #cfcfcf;
+}
+
+/* PDF-ikon – tom */
+tr.is-expanded + tr .pdf-icon{
+  background:#ffffff;
+  border-color:#cfcfcf;
+}
+
+/* PDF-ikon – fil finns */
+tr.is-expanded + tr .pdf-icon.has-file{
+  background:#dfe7ff;
+  border-color:#98b1ff;
+}
+
+/* Små justeringar för läsbarhet */
+tr.is-expanded + tr .readonly-pill{
+  background:#ffffff;
+  border-color:#cfcfcf;
+  color:#111;
+}
+
+
+/* Expanded details box */
+.details{
+  padding:10px 0 0;
+}
+
+/* Variant table layout */
+.variant-table{
+  padding:12px;
+  background:rgba(255,255,255,.03);
+  border:1px solid rgba(255,255,255,.08);
+  border-radius:14px;
 }
 .variant-head{
-  font-size:12px;color:var(--muted);font-weight:900;
-  border-bottom:1px solid rgba(255,255,255,.08);
-  background:rgba(255,255,255,.03);
+  display:grid;
+  gap:12px;
+  font-size:12px;
+  opacity:.75;
+  padding:8px 10px;
+  border-bottom:1px solid rgba(255,255,255,.10);
 }
 .variant-row{
-  font-size:13px;
-  border-bottom:1px solid rgba(255,255,255,.06);
+  display:grid;
+  gap:12px;
+  padding:10px 10px;
+  border-bottom:1px solid rgba(255,255,255,.08);
+  align-items:center;
 }
-.variant-row:last-child{border-bottom:none}
+.variant-row:last-child{ border-bottom:none; }
 
-/* ERD field wrapper for label + helper */
-.erd-field{
-  position:relative;
-  display:flex;
-  flex-direction:column;
-  gap:6px;
-}
-.erd-label{
-  font-size:11px;
-  font-weight:900;
-  letter-spacing:.2px;
-  color:rgba(233,233,239,.72);
-}
-.erd-date{
+/* Inputs */
+.input{
   width:100%;
-  border-radius:12px;
+  padding:10px 10px;
+  border-radius:10px;
   border:1px solid rgba(255,255,255,.14);
-  background:rgba(255,255,255,.04);
+  background:rgba(0,0,0,.25);
   color:var(--text);
-  padding:8px 10px;
+}
+.input::placeholder{ color:rgba(255,255,255,.45); }
+
+/* ERD changed */
+.input.erd-changed{
+  color:#ff4d4d;
+  border-color:rgba(255,77,77,.65);
   font-weight:800;
-  font-size:12px;
-  outline:none;
-}
-.erd-date:focus{
-  border-color: rgba(92,124,250,.55);
-  box-shadow: 0 0 0 3px rgba(92,124,250,.16);
-}
-.erd-helper{
-  font-size:11px;
-  color:rgba(169,169,182,.85);
-  line-height:1.2;
 }
 
-/* Notes PDF icon */
-.note-pdf{
-  width:42px;height:34px;
-  border-radius:12px;
-  border:1px solid rgba(255,255,255,.14);
-  background:rgba(255,255,255,.04);
-  color:var(--muted);
+/* Read-only pill */
+.readonly-pill{
+  display:inline-flex;
+  padding:8px 10px;
+  border-radius:999px;
+  border:1px solid rgba(255,255,255,.18);
+  background:rgba(0,0,0,.18);
+  color:rgba(255,255,255,.86);
   font-weight:900;
+  font-size:13px;
+}
+
+/* PDF icon in Notes */
+.pdf-icon{
+  width:34px;
+  height:34px;
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  border-radius:10px;
+  border:1px solid rgba(255,255,255,.14);
+  background:rgba(0,0,0,.18);
   cursor:pointer;
-  display:inline-grid;
-  place-items:center;
+  user-select:none;
 }
-.note-pdf:hover{background:rgba(255,255,255,.06); color:var(--text)}
-.note-pdf.has-file{
-  border-color: rgba(92,124,250,.55);
-  background: rgba(92,124,250,.16);
-  color: var(--text);
+.pdf-icon.has-file{
+  background:rgba(92,124,250,.18);
+  border-color:rgba(92,124,250,.35);
+}
+.pdf-icon span{
+  font-size:16px;
+  opacity:.95;
+}
+.pdf-icon.empty span{ opacity:.45; }
+
+/* 3-dots menu */
+.menu-wrap{ position:relative; display:inline-flex; }
+.menu{
+  position:absolute;
+  right:0;
+  top:110%;
+  min-width:180px;
+  background:rgba(15,16,22,.98);
+  border:1px solid rgba(255,255,255,.14);
+  border-radius:14px;
+  overflow:hidden;
+  z-index:50;
+  box-shadow:0 22px 60px rgba(0,0,0,.55);
+}
+.menu button{
+  display:block;
+  width:100%;
+  padding:10px 12px;
+  border:none;
+  background:transparent;
+  color:#fff;
+  cursor:pointer;
+  text-align:left;
+  font-weight:900;
+}
+.menu button:hover{ background:rgba(255,255,255,.08); }
+.menu button.danger{ color:var(--danger); }
+
+/* Login */
+.login-wrap{
+  display:flex;
+  justify-content:center;
+  padding:70px 18px;
+}
+.login-card{
+  width:420px;
+  border-radius:18px;
+  background:rgba(255,255,255,.06);
+  border:1px solid rgba(255,255,255,.10);
+  padding:22px;
+}
+.login-title{ font-size:22px; font-weight:900; }
+.login-sub{ margin-top:6px; opacity:.75; }
+.login-actions{
+  margin-top:14px;
+  display:flex;
+  justify-content:flex-end;
+}
+.label{
+  font-size:12px;
+  opacity:.75;
+  margin-bottom:6px;
+  font-weight:900;
+}
+.form-field{ margin-top:14px; }
+.hint{
+  font-size:12px;
+  opacity:.65;
+  margin-top:6px;
 }
 
-.kebab{
-  border:none;background:transparent;color:var(--muted);
-  font-weight:900;cursor:pointer;
-  padding:6px 10px;border-radius:10px;
+/* Modal */
+.modal-backdrop{
+  position:fixed;
+  inset:0;
+  background:rgba(0,0,0,.55);
+  display:none;
+  align-items:center;
+  justify-content:center;
+  padding:16px;
+  z-index:100;
 }
-.kebab:hover{color:var(--text); background:rgba(255,255,255,.04)}
+.modal-backdrop.is-open{ display:flex; }
+.modal{
+  width:min(780px, 100%);
+  background:#e6e6e6;              /* färgen från bilden */
+  border:1px solid #d0d0d0;
+  border:1px solid rgba(255,255,255,.12);
+  padding:18px;
+}
+.modal,
+.modal .modal-title,
+.modal .modal-sub,
+.modal .label {
+  color:#111;
+}
+.modal .input,
+.modal textarea,
+.modal select {
+  background:#ffffff;
+  color:#111;
+  border:1px solid #cfcfcf;
+}
+.modal-header{
+  display:flex;
+  align-items:flex-start;
+  justify-content:space-between;
+  gap:10px;
+}
+.modal-title{ font-size:20px; font-weight:900; }
+.modal-sub{ font-size:13px; opacity:.7; margin-top:4px; }
+.modal-body{ margin-top:14px; }
+.modal-footer{
+  margin-top:18px;
+  display:flex;
+  justify-content:flex-end;
+  gap:10px;
+}
+.form-grid{
+  display:grid;
+  grid-template-columns:1fr 1fr;
+  gap:14px;
+}
+.form-grid .full{ grid-column:1 / -1; }
 
-.empty{padding:40px 18px}
-.empty h2{margin:0 0 8px}
-.empty p{margin:0;color:var(--muted);max-width:760px}
+/* Autocomplete */
+.suggest{
+  margin-top:8px;
+  border:1px solid rgba(255,255,255,.12);
+  border-radius:12px;
+  overflow:hidden;
+  background:rgba(0,0,0,.25);
+}
+.suggest button{
+  width:100%;
+  border:none;
+  background:transparent;
+  color:#fff;
+  padding:10px 12px;
+  cursor:pointer;
+  text-align:left;
+  font-weight:800;
+}
+.suggest button:hover{ background:rgba(255,255,255,.08); }
+.suggest small{ opacity:.7; font-weight:700; }
+/* =========================================================
+   Tydliga actions-knappar i PO-listan
+   ========================================================= */
 
-@media (max-width: 900px){
-  .hero{flex-direction:column; align-items:flex-start; gap:10px}
-  .tabs{display:none}
+/* To Dispatch – primär action */
+.pill-dispatch{
+  background:#2563eb;          /* tydlig blå */
+  border:1px solid #1e4ed8;
+  color:#ffffff;
+  font-weight:900;
+}
+.pill-dispatch:hover{
+  background:#1e4ed8;
+}
+
+/* New Row – sekundär action */
+.pill-newrow{
+  background:#16a34a;          /* tydlig grön */
+  border:1px solid #15803d;
+  color:#ffffff;
+  font-weight:900;
+}
+.pill-newrow:hover{
+  background:#15803d;
+}
+
+/* Säkerställ kontrast även på ljusgrå expanderad yta */
+tr.is-expanded .pill-dispatch,
+tr.is-expanded .pill-newrow{
+  box-shadow:0 0 0 1px rgba(0,0,0,.15);
+}
+/* =========================================================
+   Disabled state – tydlig skillnad för To Dispatch / New Row
+   ========================================================= */
+
+/* Default disabled: grå + “blocked” känsla */
+.pill:disabled{
+  background:#9ca3af;            /* neutral grå */
+  border:1px solid #6b7280;
+  color:rgba(255,255,255,.85);
+  cursor:not-allowed;
+  opacity:1;                     /* vi vill inte att den bara "försvinner" */
+  filter:grayscale(25%);
+}
+
+/* Extra tydligt just för To Dispatch */
+.pill-dispatch:disabled{
+  background:#94a3b8;            /* lite blågrå, känns "inaktiv" */
+  border-color:#64748b;
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,.18);
+}
+
+/* På expanderad (ljusgrå) yta: bibehåll kontrast */
+tr.is-expanded .pill:disabled{
+  box-shadow:0 0 0 1px rgba(0,0,0,.18);
 }

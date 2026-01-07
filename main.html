@@ -3,54 +3,34 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Design Spec – Purchase Orders</title>
+  <title>Design Spec</title>
   <link rel="stylesheet" href="CSS/style.css" />
 </head>
 <body>
-
-<header class="topbar">
-  <div class="brand">
-    <div class="logo">CD</div>
-    <div>
-      <div class="brand-title">Cappelen Dimyr</div>
-      <div class="brand-subtitle">Design Spec Tool</div>
-    </div>
-  </div>
-
-  <nav class="tabs">
-    <button class="tab is-active" data-tab="purchaseorders" type="button">Purchase orders</button>
-    <button class="tab" data-tab="dispatch" type="button">Dispatch</button>
-    <button class="tab" data-tab="invoices" type="button">Invoices</button>
-  </nav>
-
-  <div class="top-actions">
-    <button class="icon-btn" type="button" aria-label="Settings">⚙</button>
-    <button class="icon-btn" type="button" aria-label="Help">?</button>
-    <button class="icon-btn" type="button" aria-label="User">DE</button>
-  </div>
-</header>
-
-<main class="page">
-
-  <section class="hero">
-    <div>
-      <h1>Purchase Orders</h1>
-      <p class="muted">Prototype / design spec UI</p>
+  <header class="topbar">
+    <div class="brand">
+      <div class="logo">CD</div>
+      <div class="brand-text">
+        <div class="brand-title">Cappelen Dimyr</div>
+        <div class="brand-sub">Design Spec</div>
+      </div>
     </div>
 
-    <div class="hero-actions">
-      <button id="printBtn" class="btn btn-secondary" type="button">Print</button>
-      <button class="btn btn-secondary" type="button">Archive</button>
-      <button id="newPoBtn" class="btn btn-primary" type="button">New PO</button>
-    </div>
-  </section>
+    <nav class="tabs" aria-label="Navigation tabs">
+      <button class="tab is-active" data-tab="purchaseorders" type="button">Purchase Orders</button>
+      <button class="tab" data-tab="dispatch" type="button">Dispatch</button>
+      <button class="tab" data-tab="inventory" type="button">Inventory</button>
+    </nav>
 
-  <section class="card">
+    <div class="top-actions"></div>
+  </header>
+
+  <main class="page">
     <div id="contentArea"></div>
-  </section>
+  </main>
 
-</main>
+  <div id="modalRoot"></div>
 
-<script src="JS/app.js"></script>
+  <script src="JS/app.js"></script>
 </body>
 </html>
