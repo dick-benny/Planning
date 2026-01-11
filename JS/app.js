@@ -32,18 +32,19 @@ const USERS = [
   { name: "Jacob", role: "user" }
 ];
 
-const CATEGORY_VALUES = ["Rug", "Colonnade", "Tapestry", "Soft"];
+const CATEGORY_VALUES = ["Rug", "Colonnade", "Tapestry", "Covers"];
 const DELIVERY_VALUES = ["Air", "Boat"];
 
 const TRANSFER_ADDRESS =
   "Partnerlogistik\ninfo@partnerlogistik.se\nÖsterängsgatan 6\n521 39 Falköping";
+const WAREHOUSE_BHADOHI_ADDRESS =
+  "Warehouse Bhadohi";
 
 const PRODUCT_DB = [
-  { name: "no.02 220x280", sku: "no02x220x280", category: "Rug", balance: 18 },
-  { name: "colonnade no.02 100x240", sku: "cno2x100x240", category: "Colonnade", balance: 6 },
-  { name: "no.03 170x240", sku: "no03x170x240", category: "Rug", balance: 9 },
-  { name: "soft no.02 60x90", sku: "sno02x60x90", category: "Soft", balance: 22 }
+  { name: "no.01 80x120", sku: "no01x80x120", category: "Rug" },
+  { name: "colonnade no.01 140x200", sku: "cno01x140x200", category: "Colonnade" }
 ];
+
 
 const state = {
   activeTab: "purchaseorders",
@@ -58,9 +59,17 @@ const state = {
   archive: [],
   dispatchRows: [],
 
+  // Analytical PO (admin)
+  analytical: {
+    filter: "selected",       // all | rugs | colonnade | tapestry | covers
+    mode: "local",       // local | transfer
+    rows: []             // [{ id, product, stock1, stock2, speedWeeks, amount }]
+  },
+
   modal: { open: false, kind: null, data: {} },
   session: { user: null }
 };
+
 
 /* =========================
    Helpers
@@ -295,6 +304,29 @@ function ensureTabs() {
   const tabs = document.querySelector(".tabs");
   if (!tabs) return;
 
+  const isAdminUser = state.session.user?.role === "admin";
+  const analyticalSel = '.tab[data-tab="analytical-po"]';
+  const existingAnalytical = tabs.querySelector(analyticalSel);
+
+  // Add/remove Analytical PO tab based on role
+  if (isAdminUser && !existingAnalytical) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "tab";
+    btn.dataset.tab = "analytical-po";
+    btn.textContent = "Analytical PO";
+
+    const archiveBtn = tabs.querySelector('.tab[data-tab="archive"]');
+    if (archiveBtn) tabs.insertBefore(btn, archiveBtn);
+    else tabs.appendChild(btn);
+  }
+
+  if (!isAdminUser && existingAnalytical) {
+    if (state.activeTab === "analytical-po") state.activeTab = "purchaseorders";
+    existingAnalytical.remove();
+  }
+
+  // Bind click handlers
   tabs.querySelectorAll(".tab").forEach(btn => {
     if (btn.__bound) return;
     btn.__bound = true;
@@ -309,12 +341,14 @@ function ensureTabs() {
     });
   });
 
+  // Highlight current tab
   const current = Array.from(tabs.querySelectorAll(".tab")).find(b => b.dataset.tab === state.activeTab);
   if (current) {
     tabs.querySelectorAll(".tab").forEach(b => b.classList.remove("is-active"));
     current.classList.add("is-active");
   }
 }
+
 
 function updateTopbarUserAndLogout() {
   const topActions = document.querySelector(".top-actions");
@@ -411,6 +445,17 @@ function render() {
     renderModal();
     return;
   }
+   {
+    // Safety: only admin
+    if (state.session.user?.role !== "admin") {
+      state.activeTab = "purchaseorders";
+      render();
+      return;
+    }
+    area.appendChild(renderAnalyticalPO());
+    renderModal();
+    return;
+  }
 
   if (state.activeTab === "inventory") {
     area.innerHTML = `
@@ -422,6 +467,8 @@ function render() {
     renderModal();
     return;
   }
+    
+
 
   if (state.activeTab === "archive") {
     area.appendChild(renderArchive());
@@ -432,6 +479,7 @@ function render() {
   area.innerHTML = `<div data-owned="app" style="padding:24px;">Not implemented.</div>`;
   renderModal();
 }
+
 
 function renderHeaderRow(title, extras = []) {
   const hero = document.createElement("div");
@@ -471,6 +519,348 @@ function renderHeaderRow(title, extras = []) {
   hero.appendChild(actions);
   return hero;
 }
+function renderAnalyticalPO() {
+  const container = document.createElement("div");
+  container.setAttribute("data-owned", "app");
+
+  // Safety: only admin
+  if (state.session.user?.role !== "admin") {
+    const box = document.createElement("div");
+    box.style.padding = "24px";
+    box.textContent = "Not authorized.";
+    container.appendChild(box);
+    return container;
+  }
+
+  // Ensure state defaults
+  if (!state.analytical) state.analytical = {};
+  if (!state.analytical.filter) state.analytical.filter = "selected";     // default = rugs
+  if (!state.analytical.mode) state.analytical.mode = "local";        // local | transfer
+
+  // Per-SKU data store (stable placeholders + amount input)
+  if (!state.analytical.bySku) state.analytical.bySku = {};           // sku -> { stock1, stock2, sales3, amount }
+
+  const FILTERS = [
+    ["rugs", "rugs"],
+    ["colonnade", "colonnade"],
+    ["tapestry", "tapestry"],
+    ["covers", "covers"],
+    ["selected", "selected"] // Amount > 0 oavsett category
+  ];
+
+  function filterToCategory(filter) {
+    // Map filter labels to PRODUCT_DB categories
+    if (filter === "rugs") return "Rug";
+    if (filter === "colonnade") return "Colonnade";
+    if (filter === "tapestry") return "Tapestry";
+    if (filter === "covers") return "Soft"; // tills ni har egen "Covers"-kategori
+    return null;
+  }
+
+  function ensureSkuRecord(sku) {
+    if (state.analytical.bySku[sku]) return state.analytical.bySku[sku];
+
+    // Placeholder numbers (stable after first creation)
+    const stock1 = Math.floor(Math.random() * 50);  // 0..49
+    const stock2 = Math.floor(Math.random() * 50);  // 0..49
+    const sales3 = 10 + Math.floor(Math.random() * 140); // 10..149
+
+    state.analytical.bySku[sku] = {
+      stock1,
+      stock2,
+      sales3,
+      amount: 0
+    };
+    return state.analytical.bySku[sku];
+  }
+
+  function statusColor(sales3, stock1, stock2) {
+    const total = Number(stock1) + Number(stock2);
+    const s = Number(sales3);
+
+    if (s > total) return "red";             // röd
+    if (s <= total / 2) return "green";      // grön
+    return "gold";                           // gul
+  }
+
+  function createPOFromAnalytical() {
+    const bySku = state.analytical.bySku || {};
+    const picked = Object.keys(bySku)
+      .map(sku => ({ sku, rec: bySku[sku] }))
+      .filter(x => Number(x.rec.amount) > 0);
+
+    if (picked.length === 0) {
+      alert("Välj minst en variant med Amount > 0.");
+      return;
+    }
+
+    const mode = String(state.analytical.mode || "local"); // local | transfer
+    const shippingAddress = (mode === "local") ? WAREHOUSE_BHADOHI_ADDRESS : TRANSFER_ADDRESS;
+
+    const poObj = {
+      id: `po-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+      po: nextPoNumber(),
+      type: mode,
+      delivery: "Local",
+      external: "",
+      date: todayYYYYMMDD(),
+      shippingAddress,
+      incoterms: "local",
+      variants: picked.map((x, idx) => {
+        const prod = (PRODUCT_DB || []).find(p => p.sku === x.sku);
+        return {
+          id: `apv-${Date.now()}-${idx}-${Math.random().toString(16).slice(2)}`,
+          name: prod?.name || "",
+          sku: x.sku,
+          category: prod?.category || "",
+          amount: Number(x.rec.amount) || 0,
+
+          // keep compatible fields (other views ignore)
+          balance: 0,
+          erd: "",
+          erdOriginal: "",
+          notesPdf: null,
+
+          // analytical extras (optional)
+          stock1: Number(x.rec.stock1) || 0,
+          stock2: Number(x.rec.stock2) || 0,
+          sales3: Number(x.rec.sales3) || 0
+        };
+      })
+    };
+
+    state.purchaseOrders.unshift(poObj);
+    state.activeTab = "purchaseorders";
+    state.expandedPoId = null;
+    state.expandedDispatchId = null;
+    render();
+  }
+
+  // Header actions (no Add row anymore)
+  const createBtn = document.createElement("button");
+  createBtn.className = "btn btn-primary";
+  createBtn.type = "button";
+  createBtn.textContent = "Create PO";
+  createBtn.addEventListener("click", createPOFromAnalytical);
+
+  container.appendChild(renderHeaderRow("Analytical PO", [createBtn]));
+
+  // Controls (filter + type)
+  const controls = document.createElement("div");
+  controls.style.padding = "0 24px 12px";
+  controls.style.display = "flex";
+  controls.style.gap = "12px";
+  controls.style.alignItems = "center";
+
+  const filterWrap = document.createElement("div");
+  filterWrap.style.display = "flex";
+  filterWrap.style.flexDirection = "column";
+  filterWrap.style.gap = "6px";
+
+  const filterLbl = document.createElement("div");
+  filterLbl.className = "label";
+  filterLbl.textContent = "Filter";
+
+  const filterSel = document.createElement("select");
+  filterSel.className = "input";
+  FILTERS.forEach(([val, label]) => {
+    const o = document.createElement("option");
+    o.value = val;
+    o.textContent = label;
+    filterSel.appendChild(o);
+  });
+  filterSel.value = state.analytical.filter;
+  filterSel.addEventListener("change", () => {
+    state.analytical.filter = filterSel.value;
+    render();
+  });
+
+  filterWrap.append(filterLbl, filterSel);
+
+  const modeWrap = document.createElement("div");
+  modeWrap.style.display = "flex";
+  modeWrap.style.flexDirection = "column";
+  modeWrap.style.gap = "6px";
+
+  const modeLbl = document.createElement("div");
+  modeLbl.className = "label";
+  modeLbl.textContent = "Type";
+
+  const modeSel = document.createElement("select");
+  modeSel.className = "input";
+  [
+    ["local", "local"],
+    ["transfer", "transfer"]
+  ].forEach(([val, label]) => {
+    const o = document.createElement("option");
+    o.value = val;
+    o.textContent = label;
+    modeSel.appendChild(o);
+  });
+  modeSel.value = state.analytical.mode;
+  modeSel.addEventListener("change", () => {
+    state.analytical.mode = modeSel.value;
+  });
+
+  modeWrap.append(modeLbl, modeSel);
+  controls.append(filterWrap, modeWrap);
+  container.appendChild(controls);
+
+  // Build list of products to show
+  
+// Build list of products to show
+const allProducts = PRODUCT_DB || [];
+let rows = [];
+
+const filterVal = String(state.analytical.filter || "selected");
+
+// selected = visa endast de som har Amount > 0 (oavsett category)
+if (filterVal === "selected") {
+  const bySku = state.analytical.bySku || {};
+  const selectedSkus = Object.keys(bySku).filter(sku => Number(bySku[sku]?.amount) > 0);
+
+  rows = selectedSkus
+    .map(sku => allProducts.find(p => p.sku === sku))
+    .filter(Boolean);
+} else {
+  const cat = filterToCategory(filterVal);
+  rows = cat ? allProducts.filter(p => p.category === cat) : allProducts.slice();
+}
+
+
+  // Table
+  const table = document.createElement("table");
+  table.className = "po-table";
+
+  const thead = document.createElement("thead");
+  const hr = document.createElement("tr");
+[
+  ["Variant", "44%"],
+  ["Lager 1", "9%"],
+  ["Lager 2", "9%"],
+  ["Sales-3", "10%"],
+  ["Status", "8%"],
+  ["Amount", "10%"],
+].forEach(([label, w], idx) => {
+  const th = document.createElement("th");
+  th.textContent = label;
+  th.style.width = w;
+  th.style.padding = "12px 10px";
+  th.style.whiteSpace = "nowrap";
+  th.style.overflow = "hidden";
+  th.style.textOverflow = "ellipsis";
+  th.style.textAlign = (idx === 0) ? "left" : "center";
+  hr.appendChild(th);
+});
+
+  thead.appendChild(hr);
+
+  const tbody = document.createElement("tbody");
+
+  rows.forEach(p => {
+    const rec = ensureSkuRecord(p.sku);
+
+    const tr = document.createElement("tr");
+
+    // highlight row if Amount > 0
+    const isDone = Number(rec.amount) > 0;
+    if (isDone) tr.style.background = "rgba(34, 197, 94, 0.08)"; // light green tint
+
+    // Variant
+    const tdVar = document.createElement("td");
+    tdVar.textContent = p.name;
+tdVar.style.textAlign = "left";
+tdVar.style.padding = "12px 10px";
+tdVar.style.overflow = "hidden";
+tdVar.style.textOverflow = "ellipsis";
+tdVar.style.whiteSpace = "nowrap";
+    // Lager 1 / Lager 2
+    const tdS1 = document.createElement("td");
+    tdS1.textContent = String(rec.stock1 ?? 0);
+
+    const tdS2 = document.createElement("td");
+    tdS2.textContent = String(rec.stock2 ?? 0);
+
+    // Sales-3
+    const tdSales = document.createElement("td");
+    tdSales.textContent = String(rec.sales3 ?? 0);
+tdS1.style.textAlign = "center";
+tdS2.style.textAlign = "center";
+tdSales.style.textAlign = "center";
+tdS1.style.padding = "12px 10px";
+tdS2.style.padding = "12px 10px";
+tdSales.style.padding = "12px 10px";
+
+    // Status
+    const tdStatus = document.createElement("td");
+    const dot = document.createElement("span");
+    tdStatus.style.textAlign = "center";
+tdStatus.style.padding = "12px 10px";
+
+    dot.style.display = "inline-block";
+dot.style.width = "14px";
+dot.style.height = "14px";
+dot.style.boxShadow = "0 0 0 3px rgba(0,0,0,0.04)";
+
+    dot.style.borderRadius = "999px";
+    dot.style.verticalAlign = "middle";
+    dot.style.background = statusColor(rec.sales3, rec.stock1, rec.stock2);
+    tdStatus.appendChild(dot);
+
+    // Amount input
+    const tdAmt = document.createElement("td");
+        tdAmt.style.textAlign = "center";
+tdAmt.style.padding = "10px";
+    const amt = document.createElement("input");
+    amt.type = "number";
+    amt.min = "0";
+    amt.step = "1";
+    amt.className = "input";
+    amt.value = String(rec.amount ?? 0);
+
+amt.style.textAlign = "center";
+amt.style.width = "90px";
+
+    amt.addEventListener("input", () => {
+      rec.amount = Number(amt.value) || 0;
+
+      // update row highlight live
+      if (Number(rec.amount) > 0) tr.style.background = "rgba(34, 197, 94, 0.08)";
+      else tr.style.background = "";
+
+      // If filter is "selected", update table as soon as something becomes 0
+      if (state.analytical.filter === "selected") render();
+    });
+    tdAmt.appendChild(amt);
+
+    // Action: clear amount
+  
+
+    tr.append(tdVar, tdS1, tdS2, tdSales, tdStatus, tdAmt);
+    tbody.appendChild(tr);
+  });
+
+  table.append(thead, tbody);
+
+  const wrap = document.createElement("div");
+  wrap.style.padding = "0 24px 24px";
+  wrap.appendChild(table);
+
+  // empty state
+  if (rows.length === 0) {
+    const hint = document.createElement("div");
+    hint.style.opacity = ".7";
+    hint.style.marginTop = "10px";
+    hint.textContent = (state.analytical.filter === "selected")
+      ? "Inga rader med Amount > 0."
+      : "Inga produkter i detta filter.";
+    wrap.appendChild(hint);
+  }
+
+  container.appendChild(wrap);
+  return container;
+}
+
 
 /* =========================
    Purchase Orders view
@@ -487,11 +877,11 @@ function renderPurchaseOrders() {
     newPo.textContent = "NewPO";
     newPo.addEventListener("click", () => {
       openModal("create-po", {
-        type: "stock",
+        type: "customer_to_falköping",
         delivery: "Air",
         external: "",
         date: todayYYYYMMDD(),
-        incoterms: "",
+        incoterms: "DAP",
         shippingAddress: ""
       });
     });
@@ -604,17 +994,45 @@ dispatchBtn.title = dispatchBtn.disabled
       actions.appendChild(dispatchBtn);
     }
 
-    if (canSeeNewPoNewRow()) {
-      const newRowBtn = document.createElement("button");
-      newRowBtn.type = "button";
-      newRowBtn.className = "pill pill-newrow";
-      newRowBtn.textContent = "New Row";
-      newRowBtn.addEventListener("click", (e) => {
-        e.stopPropagation();
-        openModal("new-row", { poId: po.id });
-      });
-      actions.appendChild(newRowBtn);
-    }
+  if (canSeeNewPoNewRow()) {
+  const newRowBtn = document.createElement("button");
+  newRowBtn.type = "button";
+  newRowBtn.className = "pill pill-newrow";
+  newRowBtn.textContent = "New Row";
+
+  newRowBtn.addEventListener("click", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    openModal("new-row", { poId: po.id });
+  });
+
+  actions.appendChild(newRowBtn);
+}
+
+// Delete PO (trash) — ALWAYS LAST
+const deletePoBtn = document.createElement("button");
+deletePoBtn.type = "button";
+deletePoBtn.className = "pill";
+deletePoBtn.textContent = "🗑";
+deletePoBtn.title = "Delete PO";
+
+deletePoBtn.addEventListener("click", (e) => {
+  e.preventDefault();
+  e.stopPropagation();
+
+  const ok = confirm(`Delete PO ${po.po}? This cannot be undone.`);
+  if (!ok) return;
+
+  state.purchaseOrders = state.purchaseOrders.filter(p => p.id !== po.id);
+  state.selectedPoIds?.delete?.(po.id);
+  if (state.expandedPoId === po.id) state.expandedPoId = null;
+
+  render();
+});
+
+actions.appendChild(deletePoBtn);
+
+
 
     actionsCell.appendChild(actions);
     tbody.appendChild(tr);
@@ -648,23 +1066,24 @@ function renderVariantTable(po) {
 
   const head = document.createElement("div");
   head.className = "variant-head";
-  head.style.gridTemplateColumns = "1.6fr 160px 140px 110px 110px 140px 90px 90px";
-  head.innerHTML = `
-    <div>Name</div>
-    <div>SKU</div>
-    <div>Category</div>
-    <div>Balance</div>
-    <div>Amount</div>
-    <div>ERD</div>
-    <div>Notes</div>
-    <div>Actions</div>
-  `;
+  head.style.gridTemplateColumns = "1.6fr 160px 140px 110px 140px 90px 90px";
+head.innerHTML = `
+  <div>Name</div>
+  <div>SKU</div>
+  <div>Category</div>
+  <div>Amount</div>
+  <div>ERD</div>
+  <div>Notes</div>
+  <div>Actions</div>
+`;
+
   wrap.appendChild(head);
 
   po.variants.forEach(v => {
     const row = document.createElement("div");
     row.className = "variant-row";
-    row.style.gridTemplateColumns = "1.6fr 160px 140px 110px 110px 140px 90px 90px";
+    row.style.gridTemplateColumns = "1.6fr 160px 140px 110px 140px 90px 90px";
+
 
     const nameCell = document.createElement("div");
     nameCell.textContent = v.name || "";
@@ -678,8 +1097,7 @@ function renderVariantTable(po) {
     catPill.textContent = v.category || "";
     catCell.appendChild(catPill);
 
-    const balCell = document.createElement("div");
-    balCell.textContent = String(v.balance ?? "");
+
 
     const amtCell = document.createElement("div");
     const amt = document.createElement("input");
@@ -795,7 +1213,8 @@ function renderVariantTable(po) {
 
     actionsCell.appendChild(menuWrap);
 
-    row.append(nameCell, skuCell, catCell, balCell, amtCell, erdCell, notesCell, actionsCell);
+    row.append(nameCell, skuCell, catCell, amtCell, erdCell, notesCell, actionsCell);
+
     wrap.appendChild(row);
   });
 
@@ -1093,7 +1512,8 @@ function renderLogin() {
    Modal plumbing
 ========================= */
 function openModal(kind, data) {
-  state.modal.open = true;
+  console.log("[openModal]", kind, data);
+state.modal.open = true;
   state.modal.kind = kind;
   state.modal.data = data || {};
   closeMenus();
@@ -1108,9 +1528,14 @@ function closeModal() {
 }
 
 function renderModal() {
-  const root = document.getElementById("modalRoot");
-  if (!root) return;
+  let root = document.getElementById("modalRoot");
+  if (!root) {
+    root = document.createElement("div");
+    root.id = "modalRoot";
+    document.body.appendChild(root);
+  }
   root.innerHTML = "";
+
 
   const backdrop = document.createElement("div");
   backdrop.className = `modal-backdrop ${state.modal.open ? "is-open" : ""}`;
@@ -1200,40 +1625,58 @@ function renderCreatePoModal() {
   create.className = "btn btn-primary";
   create.textContent = "Create PO";
 
-  function validate() {
-    const typeOk = ["stock", "transfer"].includes(String(data.type || "").trim());
-    const deliveryOk = DELIVERY_VALUES.includes(String(data.delivery || "").trim());
-    const externalOk = String(data.external || "").trim().length > 0;
-    const dateOk = String(data.date || "").trim().length > 0;
-    const incOk = String(data.incoterms || "").trim().length > 0;
+    function validate() {
+    const typeVal = String(data.type || "").trim();
+    const typeOk = ["customer", "customer_to_falköping"].includes(typeVal);
 
-    const shipVal = (String(data.type || "").trim() === "transfer")
+    const deliveryOk = DELIVERY_VALUES.includes(String(data.delivery || "").trim());
+
+    // External krävs bara för customer_to_falköping
+    const externalOk = (typeVal === "customer_to_falköping")
+      ? (String(data.external || "").trim().length > 0)
+      : true;
+
+    const dateOk = String(data.date || "").trim().length > 0;
+
+    // Incoterms måste vara DDP eller DAP
+    const incVal = String(data.incoterms || "").trim();
+    const incOk = ["DDP", "DAP"].includes(incVal);
+
+    // Shipping address:
+    // - customer_to_falköping => alltid TRANSFER_ADDRESS
+    // - customer => måste vara ifyllt av användaren
+    const shipVal = (typeVal === "customer_to_falköping")
       ? TRANSFER_ADDRESS
       : String(data.shippingAddress || "").trim();
     const shipOk = shipVal.length > 0;
 
     return typeOk && deliveryOk && externalOk && dateOk && incOk && shipOk;
   }
+
   function syncDisabled() { create.disabled = !validate(); }
 
   // Type
-  const typeField = field("Type");
-  const typeSelect = document.createElement("select");
-  typeSelect.className = "input";
-  ["stock", "transfer"].forEach(t => {
-    const opt = document.createElement("option");
-    opt.value = t;
-    opt.textContent = t;
-    if ((data.type || "stock") === t) opt.selected = true;
-    typeSelect.appendChild(opt);
-  });
-  typeSelect.addEventListener("change", () => {
-    data.type = typeSelect.value;
-    if (data.type === "transfer") data.shippingAddress = TRANSFER_ADDRESS;
-    syncDisabled();
-    renderModal(); // update shipping field readonly
-  });
-  typeField.appendChild(typeSelect);
+    
+
+const typeField = field("Type");
+const typeSelect = document.createElement("select");
+typeSelect.className = "input";
+["customer", "customer_to_falköping"].forEach(t => {
+  const opt = document.createElement("option");
+  opt.value = t;
+  opt.textContent = t;
+  if ((data.type || "customer") === t) opt.selected = true;
+  typeSelect.appendChild(opt);
+});
+typeSelect.addEventListener("change", () => {
+  data.type = typeSelect.value;
+  if (data.type === "customer_to_falköping") data.shippingAddress = TRANSFER_ADDRESS;
+  syncDisabled();
+  renderModal(); // update shipping field readonly
+});
+typeField.appendChild(typeSelect);
+
+
 
   // Delivery
   const delField = field("Delivery");
@@ -1250,11 +1693,59 @@ function renderCreatePoModal() {
   delField.appendChild(delSelect);
 
   // External
+   // External
   const externalField = field("External");
-  const externalInput = inputText(data.external || "");
-  externalInput.placeholder = "#B2B-2001";
-  externalInput.addEventListener("input", () => { data.external = externalInput.value; syncDisabled(); });
+const externalInput = inputText(data.external || "");
+  // Help text + info tooltip (robust: syns alltid)
+  const externalHelp = document.createElement("div");
+  externalHelp.style.display = "flex";
+  externalHelp.style.alignItems = "center";
+  externalHelp.style.gap = "6px";
+  externalHelp.style.marginTop = "4px";
+  externalHelp.style.fontSize = "12px";
+  externalHelp.style.color = "#666";
+
+  const externalInfoBtn = document.createElement("button");
+  externalInfoBtn.type = "button";
+  externalInfoBtn.className = "icon-btn";
+  externalInfoBtn.textContent = "ℹ︎";
+  externalInfoBtn.title = "Required for customer_to_falköping";
+  externalInfoBtn.style.width = "22px";
+  externalInfoBtn.style.height = "22px";
+  externalInfoBtn.style.lineHeight = "22px";
+
+  const externalHelpText = document.createElement("span");
+  externalHelpText.textContent = "Required for customer_to_falköping";
+
+  externalHelp.appendChild(externalInfoBtn);
+  externalHelp.appendChild(externalHelpText);
+
+externalInput.title = "Required for customer_to_falköping";
+  function syncExternalRequired() {
+  const isFalkoping = String(data.type || "") === "customer_to_falköping";
+  const isEmpty = String(externalInput.value || "").trim() === "";
+
+  // röd kant bara när det krävs och är tomt
+  externalInput.style.borderColor =
+    (isFalkoping && isEmpty) ? "red" : "";
+
+  // visa hjälptyp bara när customer_to_falköping
+  externalHelp.style.display = isFalkoping ? "flex" : "none";
+}
+
+
+  externalInput.addEventListener("input", () => {
+    data.external = externalInput.value;
+    syncExternalRequired();
+    syncDisabled();
+  });
+
+  // initial state
+  syncExternalRequired();
+
   externalField.appendChild(externalInput);
+externalField.appendChild(externalHelp);
+
 
   // Date
   const dateField = field("Date");
@@ -1266,46 +1757,67 @@ function renderCreatePoModal() {
   dateField.appendChild(dateInput);
 
   // Incoterms
+    // Incoterms
   const incField = field("Incoterms");
-  const incInput = inputText(data.incoterms || "");
-  incInput.placeholder = "DAP";
-  incInput.addEventListener("input", () => { data.incoterms = incInput.value; syncDisabled(); });
-  incField.appendChild(incInput);
+  const incSelect = document.createElement("select");
+  incSelect.className = "input";
 
+  ["", "DDP", "DAP"].forEach(v => {
+    const opt = document.createElement("option");
+    opt.value = v;
+    opt.textContent = v === "" ? "Select…" : v;
+    if ((data.incoterms || "") === v) opt.selected = true;
+    incSelect.appendChild(opt);
+  });
+
+  incSelect.addEventListener("change", () => {
+    data.incoterms = incSelect.value;
+    syncDisabled();
+  });
+
+  incField.appendChild(incSelect);
+
+
+  // Shipping Address
   // Shipping Address
   const shipField = field("Shipping Adress");
   shipField.classList.add("full");
+
   const shipArea = document.createElement("textarea");
   shipArea.className = "input";
   shipArea.style.minHeight = "90px";
 
-  const isTransfer = String(data.type || "stock") === "transfer";
-  shipArea.value = isTransfer ? TRANSFER_ADDRESS : (data.shippingAddress || "");
-  shipArea.readOnly = isTransfer;
+  const isFalkoping = String(data.type || "customer") === "customer_to_falköping";
+  shipArea.value = isFalkoping ? TRANSFER_ADDRESS : (data.shippingAddress || "");
+  shipArea.readOnly = isFalkoping;
 
   shipArea.addEventListener("input", () => {
     data.shippingAddress = shipArea.value;
     syncDisabled();
   });
+
   shipField.appendChild(shipArea);
+
 
   create.onclick = () => {
     if (!validate()) return;
 
-    const poNo = nextPoNumber();
-    const isTransferNow = String(data.type || "stock") === "transfer";
+        const poNo = nextPoNumber();
+    const typeVal = String(data.type || "customer").trim();
+    const isFalkoping = typeVal === "customer_to_falköping";
 
     const newPo = {
       id: `po-${poNo.toLowerCase()}`,
       po: poNo,
-      type: data.type || "stock",
+      type: typeVal,
       delivery: data.delivery || "Air",
-      external: data.external.trim(),
+      external: String(data.external || "").trim(),
       date: data.date,
-      shippingAddress: isTransferNow ? TRANSFER_ADDRESS : String(data.shippingAddress || "").trim(),
-      incoterms: data.incoterms.trim(),
+      shippingAddress: isFalkoping ? TRANSFER_ADDRESS : String(data.shippingAddress || "").trim(),
+      incoterms: String(data.incoterms || "").trim(),
       variants: []
     };
+
 
     state.purchaseOrders.unshift(newPo);
     state.expandedPoId = newPo.id;
@@ -1319,6 +1831,9 @@ function renderCreatePoModal() {
   syncDisabled();
 
   frag.append(header, body, footer);
+    // Initial markering
+
+
   return frag;
 }
 
@@ -1330,6 +1845,7 @@ function renderNewRowModal() {
   const po = state.purchaseOrders.find(p => p.id === data.poId);
 
   const frag = document.createDocumentFragment();
+  
 
   const header = document.createElement("div");
   header.className = "modal-header";
@@ -1355,15 +1871,17 @@ function renderNewRowModal() {
   cancel.textContent = "Cancel";
   cancel.onclick = closeModal;
 
-  const add = document.createElement("button");
-  add.className = "btn btn-primary";
-  add.textContent = "Add Row";
+  const save = document.createElement("button");
+  save.className = "btn btn-primary";
+  save.textContent = "Save";
 
-  // Fields
+  // ----- Fields -----
+
+  // Name + dropdown
   const nameField = field("Name");
   nameField.classList.add("full");
   const nameInput = inputText("");
-  nameInput.placeholder = "Sök… (minst 2 tecken)";
+  nameInput.placeholder = "Klicka för att välja…";
   nameField.appendChild(nameInput);
 
   const suggestBox = document.createElement("div");
@@ -1381,11 +1899,7 @@ function renderNewRowModal() {
   catInput.readOnly = true;
   catField.appendChild(catInput);
 
-  const balField = field("Balance");
-  const balInput = inputText("");
-  balInput.readOnly = true;
-  balField.appendChild(balInput);
-
+  // Amount
   const amtField = field("Amount");
   const amtInput = document.createElement("input");
   amtInput.type = "number";
@@ -1395,6 +1909,71 @@ function renderNewRowModal() {
   amtInput.value = "";
   amtField.appendChild(amtInput);
 
+  // Notes (TXT icon + textarea)
+  const notesField = field("Notes");
+  notesField.classList.add("full");
+
+  const notesBtn = document.createElement("button");
+  notesBtn.type = "button";
+  notesBtn.className = "pdf-icon empty";
+  notesBtn.title = "Notes";
+  notesBtn.textContent = "TXT";
+
+  const notesArea = document.createElement("textarea");
+  notesArea.className = "input";
+  notesArea.rows = 4;
+  notesArea.style.display = "none";
+  notesArea.value = "";
+
+  notesBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const open = notesArea.style.display !== "none";
+    notesArea.style.display = open ? "none" : "block";
+    if (!open) notesArea.focus();
+  });
+
+  notesArea.addEventListener("input", () => {
+    const hasText = String(notesArea.value || "").trim().length > 0;
+    notesBtn.className = `pdf-icon ${hasText ? "has-file" : "empty"}`;
+    syncDisabled();
+  });
+
+  notesField.appendChild(notesBtn);
+  notesField.appendChild(notesArea);
+
+  // Design (PDF icon + upload)
+  const designField = field("Design");
+
+  const designBtn = document.createElement("button");
+  designBtn.type = "button";
+  designBtn.className = "pdf-icon empty";
+  designBtn.title = "Upload Design PDF";
+  designBtn.textContent = "PDF";
+
+  const designFileInput = document.createElement("input");
+  designFileInput.type = "file";
+  designFileInput.accept = "application/pdf";
+  designFileInput.style.display = "none";
+
+  let designPdf = null;
+
+  designBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    designFileInput.click();
+  });
+
+  designFileInput.addEventListener("change", () => {
+    const f = designFileInput.files && designFileInput.files[0];
+    if (!f) return;
+    designPdf = { name: f.name, size: f.size };
+    designBtn.className = "pdf-icon has-file";
+    syncDisabled();
+  });
+
+  designField.appendChild(designBtn);
+  designField.appendChild(designFileInput);
+
+  // ----- Selection logic -----
   let selectedProduct = null;
 
   function setSelectedProduct(p) {
@@ -1402,26 +1981,30 @@ function renderNewRowModal() {
     nameInput.value = p.name;
     skuInput.value = p.sku;
     catInput.value = p.category;
-    balInput.value = String(po?.type === "transfer" ? (p.balance ?? 0) : "");
     suggestBox.style.display = "none";
     suggestBox.innerHTML = "";
     syncDisabled();
   }
 
-  function refreshSuggestions() {
+  function hideSuggestions() {
+    suggestBox.style.display = "none";
+    suggestBox.innerHTML = "";
+  }
+
+  function refreshSuggestions(forceShowAll = false) {
     const q = String(nameInput.value || "").trim();
-    if (q.length < 2) {
-      suggestBox.style.display = "none";
-      suggestBox.innerHTML = "";
-      return;
-    }
+    const nq = normalize(q);
+
     const hits = PRODUCT_DB
-      .filter(p => normalize(p.name).includes(normalize(q)))
-      .slice(0, 6);
+      .filter(p => {
+        if (forceShowAll && !q) return true;
+        if (!q) return true;
+        return normalize(p.name).includes(nq);
+      })
+      .slice(0, 12);
 
     if (hits.length === 0) {
-      suggestBox.style.display = "none";
-      suggestBox.innerHTML = "";
+      hideSuggestions();
       return;
     }
 
@@ -1437,52 +2020,74 @@ function renderNewRowModal() {
     suggestBox.style.display = "block";
   }
 
+  nameInput.addEventListener("focus", () => refreshSuggestions(true));
+  nameInput.addEventListener("click", () => refreshSuggestions(true));
+
   nameInput.addEventListener("input", () => {
     selectedProduct = null;
     skuInput.value = "";
     catInput.value = "";
-    balInput.value = "";
-    refreshSuggestions();
+    refreshSuggestions(false);
     syncDisabled();
   });
 
-  function canAdd() {
+  nameInput.addEventListener("blur", () => {
+    setTimeout(hideSuggestions, 150);
+  });
+
+  // ----- Save logic -----
+  function canSave() {
     if (!po) return false;
     if (!selectedProduct) return false;
     const amt = Number(amtInput.value);
     return Number.isFinite(amt) && amt > 0;
   }
-  function syncDisabled() { add.disabled = !canAdd(); }
+
+  function syncDisabled() {
+    save.disabled = !canSave();
+  }
+
   amtInput.addEventListener("input", syncDisabled);
 
-  add.onclick = () => {
+  save.onclick = () => {
     if (!po) return;
-    if (!canAdd()) return;
+    if (!canSave()) return;
 
     const amt = Number(amtInput.value);
+    const notesText = String(notesArea.value || "").trim();
+
     po.variants.push({
       id: `v-${Math.random().toString(16).slice(2)}`,
       name: selectedProduct.name,
       sku: selectedProduct.sku,
       category: selectedProduct.category,
-      balance: po.type === "transfer" ? (selectedProduct.balance ?? 0) : "",
+      balance: "",
       amount: amt,
+      notesText: notesText,
+      designPdf: designPdf,
+
+      // TEMP: för att din befintliga PDF-ikon i variant-tabellen ska visa nåt direkt
+      // (den tittar på v.notesPdf idag)
+      notesPdf: designPdf || null,
+
       erd: "",
-      erdOriginal: "",
-      notesPdf: null
+      erdOriginal: ""
     });
 
     closeModal();
   };
 
-  grid.append(nameField, skuField, catField, balField, amtField);
+  // Layout
+  grid.append(nameField, skuField, catField, amtField, designField, notesField);
   body.appendChild(grid);
-  footer.append(cancel, add);
+
+  footer.append(cancel, save);
   syncDisabled();
 
   frag.append(header, body, footer);
   return frag;
 }
+
 
 /* =========================
    Modal: New Dispatch
@@ -1619,7 +2224,7 @@ function renderPrintHtmlForPOs(pos, title) {
             <td>${escapeHtml(v.name||"")}</td>
             <td>${escapeHtml(v.sku||"")}</td>
             <td>${escapeHtml(v.category||"")}</td>
-            <td>${escapeHtml(String(v.balance??""))}</td>
+            
             <td>${escapeHtml(String(v.amount??""))}</td>
             <td>${escapeHtml(v.erd||"")}</td>
           </tr>`).join("")}
