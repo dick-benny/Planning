@@ -585,3 +585,188 @@ tr.is-expanded .pill-newrow{
 tr.is-expanded .pill:disabled{
   box-shadow:0 0 0 1px rgba(0,0,0,.18);
 }
+/* =========================================================
+   Light theme override (matchar referensbilder)
+   Endast färg + font – ingen textlogik
+   ========================================================= */
+:root{
+  --bg:#ffffff;
+  --text:#111827;
+  --muted:#6b7280;
+  --line:#e5e7eb;
+  --card:#ffffff;
+  --card2:#f3f4f6;
+
+  /* behåll accent, ok, danger */
+  --radius:16px;
+  --font:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Inter,Arial;
+}
+
+body{
+  background:#ffffff;   /* bort med dark radial gradient */
+  color:var(--text);
+}
+
+/* Topbar */
+.topbar{
+  border-bottom:1px solid var(--line);
+  background:#ffffff;
+}
+
+/* Tabs */
+.tabs{
+  background:#eeeeee;
+  border:1px solid #e2e2e2;
+  border-radius:12px;
+  padding:8px;
+  gap:8px;
+}
+
+.tab{
+  color:#6b7280;
+  border-radius:10px;
+  padding:10px 18px;
+  font-weight:700;
+}
+
+.tab.is-active{
+  background:#ffffff;      /* vit aktiv tab som i bilden */
+  color:#111827;
+  box-shadow:0 1px 2px rgba(0,0,0,.08);
+}
+
+/* Page header row */
+.hero{
+  border-bottom:1px solid var(--line);
+  background:#ffffff;
+}
+
+/* Tabeller (PO-listan) */
+.table{
+  background:#ffffff;
+}
+
+.table thead th{
+  opacity:1;
+  color:#6b7280;
+  font-weight:700;
+  border-bottom:1px solid var(--line);
+  padding:14px 10px;
+}
+
+.table tbody td{
+  border-top:1px solid var(--line);
+  padding:16px 10px;
+  color:#111827;
+}
+
+/* Inputs i ljus vy */
+.input{
+  background:#ffffff;
+  color:#111827;
+  border:1px solid #d1d5db;
+}
+
+.input::placeholder{
+  color:#9ca3af;
+}
+
+/* Pills / buttons i ljus vy (neutral bas) */
+.btn, .pill, .icon-btn{
+  color:#111827;
+  background:#ffffff;
+  border:1px solid #d1d5db;
+}
+
+.btn:hover, .pill:hover, .icon-btn:hover{
+  background:#f3f4f6;
+}
+
+/* Behåll tydliga actions-färger du redan lagt */
+.pill-dispatch{
+  color:#ffffff;
+  border:none;
+}
+.pill-newrow{
+  color:#ffffff;
+  border:none;
+}
+
+/* Meny (3-dots) i ljus vy */
+.menu{
+  background:#ffffff;
+  border:1px solid #e5e7eb;
+  box-shadow:0 16px 40px rgba(0,0,0,.12);
+}
+.menu button{
+  color:#111827;
+}
+.menu button:hover{
+  background:#f3f4f6;
+}
+
+/* Autocomplete i ljus vy */
+.suggest{
+  background:#ffffff;
+  border:1px solid #e5e7eb;
+}
+.suggest button{
+  color:#111827;
+}
+.suggest button:hover{
+  background:#f3f4f6;
+}
+/* ===== Analytical PO table row separators + done highlight ===== */
+.po-table{
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+.po-table tbody td{
+  border-top: 1px solid var(--line);
+}
+
+/* Matcha "Shopify-linje": lite mer luft */
+.po-table tbody td{
+  padding-top: 18px;
+  padding-bottom: 18px;
+}
+
+/* Ljusgrön markering när Amount > 0 */
+.po-table tbody tr.ap-done td{
+  background: rgba(34, 197, 94, 0.10);
+}
+/* ===== Create PO ready state (Analytical) ===== */
+.btn-ready{
+  background: rgba(34, 197, 94, 0.15);   /* ljusgrön */
+  border: 1px solid rgba(34, 197, 94, 0.6);
+  color: #065f46;
+}
+
+.btn-ready:hover{
+  background: rgba(34, 197, 94, 0.25);
+}
+
+.btn-ready:disabled{
+  background: #e5e7eb;
+  border-color: #d1d5db;
+  color: #9ca3af;
+}
+/* ===== Light green when action is clickable ===== */
+.pill-ready{
+  background: rgba(34, 197, 94, 0.16);
+  border: 1px solid rgba(34, 197, 94, 0.55);
+  color:#065f46;
+}
+
+.pill-ready:hover{
+  background: rgba(34, 197, 94, 0.24);
+}
+
+/* Done action in PO list */
+.pill-done{
+  background:#111827;
+  border:1px solid rgba(17,24,39,0.35);
+  color:#fff;
+  font-weight:900;
+}
