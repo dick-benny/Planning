@@ -325,6 +325,66 @@ function loadSession() {
     if (parsed?.name && parsed?.role) state.session.user = parsed;
   } catch {}
 }
+/* =========================
+   Analytical SKU DB (localStorage)
+   - Persists per-SKU stock/sales so it does NOT re-randomize on each login
+   - Keys:
+     stock1 = Lager Bhadohi (1–10)
+     stock2 = Lager Falköping (2–15)
+     sales3 = Sales 3 månader (2–10)
+========================= */
+const STORAGE_KEY_ANALYTICAL_SKU_DB = "ds_analytical_sku_db";
+
+function randInt(min, max) {
+  const a = Number(min), b = Number(max);
+  const lo = Math.min(a, b), hi = Math.max(a, b);
+  return lo + Math.floor(Math.random() * (hi - lo + 1));
+}
+
+function loadAnalyticalSkuDb() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY_ANALYTICAL_SKU_DB);
+    const parsed = raw ? JSON.parse(raw) : {};
+    const obj = (parsed && typeof parsed === "object") ? parsed : {};
+    const out = {};
+    Object.keys(obj).forEach((sku) => {
+      const rec = obj[sku] || {};
+      const stock1 = Number(rec.stock1);
+      const stock2 = Number(rec.stock2);
+      const sales3 = Number(rec.sales3);
+      out[sku] = {
+        stock1: Number.isFinite(stock1) ? stock1 : randInt(1, 10),
+        stock2: Number.isFinite(stock2) ? stock2 : randInt(2, 15),
+        sales3: Number.isFinite(sales3) ? sales3 : randInt(2, 10),
+        inProduction: Number.isFinite(Number(rec.inProduction)) ? Number(rec.inProduction) : 0,
+        incoming: Number.isFinite(Number(rec.incoming)) ? Number(rec.incoming) : 0,
+        amount: 0
+      };
+    });
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+function saveAnalyticalSkuDb(map) {
+  try {
+    const srcMap = (map && typeof map === "object") ? map : {};
+    const persist = {};
+    Object.keys(srcMap).forEach((sku) => {
+      const rec = srcMap[sku] || {};
+      persist[sku] = {
+  stock1: Number(rec.stock1) || 0,
+  stock2: Number(rec.stock2) || 0,
+  sales3: Number(rec.sales3) || 0,
+  inProduction: Number(rec.inProduction) || 0,
+  incoming: Number(rec.incoming) || 0
+};
+    });
+    localStorage.setItem(STORAGE_KEY_ANALYTICAL_SKU_DB, JSON.stringify(persist));
+  } catch {}
+}
+
 loadSession();
 
 /* =========================
@@ -337,24 +397,44 @@ function poQty(po) {
   }, 0);
 }
 
+
+function poErdValue(po) {
+  const vars = Array.isArray(po?.variants) ? po.variants : [];
+  if (vars.length === 0) return { kind: "none", value: "none", date: null };
+  // none if ANY ERD missing/invalid
+  let maxDate = null;
+  let maxStr = "";
+  for (const v of vars) {
+    const s = String(v?.erd || "").trim();
+    const d = parseDateYYYYMMDD(s);
+    if (!d) return { kind: "none", value: "none", date: null };
+    if (!maxDate || d.getTime() > maxDate.getTime()) {
+      maxDate = d;
+      maxStr = s;
+    }
+  }
+  return { kind: "date", value: maxStr || "none", date: maxDate };
+}
+
+function comparePoByErd(a, b) {
+  const ea = poErdValue(a);
+  const eb = poErdValue(b);
+  if (ea.kind !== eb.kind) {
+    // Put "none" first so buyers can quickly see incomplete ERDs
+    return ea.kind === "none" ? -1 : 1;
+  }
+  if (ea.kind === "none") return 0;
+  // Both dates: newest first
+  return eb.date.getTime() - ea.date.getTime();
+}
+
 // Sum ordered amount for a SKU across all OPEN POs (i.e., the ones currently in Purchase Orders).
 // Used by Analytical PO as the 'InProduction' indicator.
 function inProductionForSku(sku) {
   const key = String(sku || '').trim();
   if (!key) return 0;
-
-  const openPos = Array.isArray(state.purchaseOrders) ? state.purchaseOrders : [];
-
-  let sum = 0;
-  for (const po of openPos) {
-    const vars = Array.isArray(po?.variants) ? po.variants : [];
-    for (const v of vars) {
-      if (String(v?.sku || '').trim() === key) {
-        sum += Number(v?.amount) || 0;
-      }
-    }
-  }
-  return sum;
+  const rec = (state.analytical && state.analytical.bySku && state.analytical.bySku[key]) ? state.analytical.bySku[key] : null;
+  return rec ? (Number(rec.inProduction) || 0) : 0;
 }
 
 // Sum 'incoming' for a SKU:
@@ -363,32 +443,8 @@ function inProductionForSku(sku) {
 function incomingForSku(sku) {
   const key = String(sku || '').trim();
   if (!key) return 0;
-
-  const transferTypes = new Set(['transfer_aircargo', 'transfer_boat']);
-  let sum = 0;
-
-  // Transfer POs in Purchase Orders
-  for (const po of (Array.isArray(state.purchaseOrders) ? state.purchaseOrders : [])) {
-    if (!transferTypes.has(String(po?.type || '').trim())) continue;
-    for (const v of (Array.isArray(po?.variants) ? po.variants : [])) {
-      if (String(v?.sku || '').trim() === key) {
-        sum += Number(v?.amount) || 0;
-      }
-    }
-  }
-
-  // Anything currently in Dispatch
-  for (const row of (Array.isArray(state.dispatchRows) ? state.dispatchRows : [])) {
-    for (const po of (Array.isArray(row?.pos) ? row.pos : [])) {
-      for (const v of (Array.isArray(po?.variants) ? po.variants : [])) {
-        if (String(v?.sku || '').trim() === key) {
-          sum += Number(v?.amount) || 0;
-        }
-      }
-    }
-  }
-
-  return sum;
+  const rec = (state.analytical && state.analytical.bySku && state.analytical.bySku[key]) ? state.analytical.bySku[key] : null;
+  return rec ? (Number(rec.incoming) || 0) : 0;
 }
 
 
@@ -538,13 +594,27 @@ function ensureTabs() {
     tabs.appendChild(btn);
   }
   
-  // Keep CRM tabs last (CRM then CRM Coop)
-  function moveCrmTabsToEnd() {
-    const crm = tabs.querySelector('.tab[data-tab="crm"]');
-    const coop = tabs.querySelector('.tab[data-tab="crm-coop"]');
-    if (crm) tabs.appendChild(crm);
-    if (coop) tabs.appendChild(coop);
-  }
+  // Ensure Form design tab exists (should be last)
+const formSel = '.tab[data-tab="form-design"]';
+const existingForm = tabs.querySelector(formSel);
+if (!existingForm) {
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "tab";
+  btn.dataset.tab = "form-design";
+  btn.textContent = "Form design";
+  tabs.appendChild(btn);
+}
+
+// Keep CRM tabs at the end (CRM -> CRM Coop -> Form design)
+function moveCrmTabsToEnd() {
+  const crm = tabs.querySelector('.tab[data-tab="crm"]');
+  const coop = tabs.querySelector('.tab[data-tab="crm-coop"]');
+  const form = tabs.querySelector('.tab[data-tab="form-design"]');
+  if (crm) tabs.appendChild(crm);
+  if (coop) tabs.appendChild(coop);
+  if (form) tabs.appendChild(form);
+}
 
   moveCrmTabsToEnd();
 
@@ -677,6 +747,25 @@ function markPoDone(poId) {
   if (idx < 0) return;
 
   const po = state.purchaseOrders[idx];
+// === Inventory rules on PO Done ===
+// When PO type=prod_to_local is Done:
+// - Increase Lager Bhadohi (stock1) by Amount for each variant
+// - Decrease InProduction by the same Amount
+if (po && po.type === "prod_to_local") {
+  if (!state.analytical.bySku) state.analytical.bySku = loadAnalyticalSkuDb();
+  for (const v of (po.variants || [])) {
+    const sku = String(v.sku || '').trim();
+    if (!sku) continue;
+    if (!state.analytical.bySku[sku]) continue;
+    const rec = state.analytical.bySku[sku];
+    const amt = Number(v.amount) || 0;
+    if (amt <= 0) continue;
+    rec.stock1 = (Number(rec.stock1) || 0) + amt;
+    rec.inProduction = Math.max(0, (Number(rec.inProduction) || 0) - amt);
+  }
+  saveAnalyticalSkuDb(state.analytical.bySku);
+}
+
 
   // Move PO to Archive
   state.purchaseOrders.splice(idx, 1);
@@ -698,6 +787,24 @@ function movePoToDispatch(poId) {
   const idx = state.purchaseOrders.findIndex(p => p.id === poId);
   if (idx < 0) return;
   const po = state.purchaseOrders[idx];
+// === Inventory rules on ToDispatch ===
+// When ToDispatch is clicked for prod_to_local:
+// - Move Amount from InProduction to Incoming for each variant
+if (po && po.type === "prod_to_local") {
+  if (!state.analytical.bySku) state.analytical.bySku = loadAnalyticalSkuDb();
+  for (const v of (po.variants || [])) {
+    const sku = String(v.sku || '').trim();
+    if (!sku) continue;
+    if (!state.analytical.bySku[sku]) continue;
+    const rec = state.analytical.bySku[sku];
+    const amt = Number(v.amount) || 0;
+    if (amt <= 0) continue;
+    rec.inProduction = Math.max(0, (Number(rec.inProduction) || 0) - amt);
+    rec.incoming = (Number(rec.incoming) || 0) + amt;
+  }
+  saveAnalyticalSkuDb(state.analytical.bySku);
+}
+
 
   const row = nearestUpcomingDispatchRow();
   const commInvoiceUrl = createCommercialInvoiceDummyPdfUrl(po.po);
@@ -817,7 +924,11 @@ function renderMain() {
       mount(renderCrmCoop());
       return;
     }
-    case "inventory": {
+    case "form-design": {
+  mount(renderFormDesign());
+  return;
+}
+case "inventory": {
       area.innerHTML = `
         <div data-owned="app" style="padding:24px;">
           <h2 style="margin:0 0 6px;">Inventory</h2>
@@ -830,7 +941,8 @@ function renderMain() {
       mount(renderArchive());
       return;
     }
-    default: {
+
+default: {
       area.innerHTML = `<div data-owned="app" style="padding:24px;">Not implemented.</div>`;
       return;
     }
@@ -955,6 +1067,13 @@ const STORAGE_KEY_CRM_COOP_LAST_IMPORT = "butler_crm_coop_last_import_v1";
 function normalizeEmail(v) {
   return String(v || "").trim().toLowerCase();
 }
+function randomEmail() {
+  const first = Math.random().toString(36).slice(2, 8);
+  const last = Math.random().toString(36).slice(2, 10);
+  const domains = ["example.com", "mail.com", "prospect.se", "inbox.io"];
+  return `${first}.${last}@${domains[Math.floor(Math.random() * domains.length)]}`;
+}
+
 function nowISO() { return new Date().toISOString(); }
 function todayYYYYMMDD() {
   const d = new Date();
@@ -1189,12 +1308,7 @@ function renderCrmCoop() {
   const db = loadCrmCoopLeads();
   const leads = Object.values(db || {}).sort((a,b) => (b.createdDate || "").localeCompare(a.createdDate || ""));
 
-  // Filters
-  const distinctRegion = crmCoopGetDistinctValues(leads, "region");
-  const distinctCountry = crmCoopGetDistinctValues(leads, "country");
-  const distinctTown = crmCoopGetDistinctValues(leads, "town");
-  const distinctResp = crmCoopGetDistinctValues(leads, "responsible");
-
+  // Filters (cascading)
   const filterRow = document.createElement("div");
   filterRow.className = "filters";
   filterRow.style.display = "grid";
@@ -1204,10 +1318,59 @@ function renderCrmCoop() {
 
   const f = state.ui.crmCoop?.filters || { region:"all", country:"all", town:"all", responsible:"all" };
 
-  filterRow.appendChild(makeSelect("Region", distinctRegion, f.region, (v)=>{ state.ui.crmCoop.filters.region=v; render(); }));
-  filterRow.appendChild(makeSelect("Country", distinctCountry, f.country, (v)=>{ state.ui.crmCoop.filters.country=v; render(); }));
-  filterRow.appendChild(makeSelect("Town", distinctTown, f.town, (v)=>{ state.ui.crmCoop.filters.town=v; render(); }));
-  filterRow.appendChild(makeSelect("Responsible", distinctResp, f.responsible, (v)=>{ state.ui.crmCoop.filters.responsible=v; render(); }));
+  // Region options are always based on full dataset
+  const distinctRegion = crmCoopGetDistinctValues(leads, "region");
+
+  // Country options depend on selected region
+  const leadsForCountry = leads.filter(l => (f.region === "all") || (String(l.region || "") === f.region));
+  const distinctCountry = crmCoopGetDistinctValues(leadsForCountry, "country");
+
+  // Town options depend on selected country (and region, if selected)
+  const leadsForTown = leads.filter(l => {
+    if (f.region !== "all" && String(l.region || "") !== f.region) return false;
+    if (f.country !== "all" && String(l.country || "") !== f.country) return false;
+    return true;
+  });
+  const distinctTown = crmCoopGetDistinctValues(leadsForTown, "town");
+
+  // Responsible stays global (can be tightened later if needed)
+  const distinctResp = crmCoopGetDistinctValues(leads, "responsible");
+
+  // If current selections are no longer valid due to cascading, reset them safely.
+  if (f.country !== "all" && !distinctCountry.includes(f.country)) {
+    f.country = "all";
+    f.town = "all";
+  }
+  if (f.town !== "all" && !distinctTown.includes(f.town)) {
+    f.town = "all";
+  }
+
+  // Persist back (in case we mutated invalid selections)
+  if (!state.ui.crmCoop) state.ui.crmCoop = {};
+  if (!state.ui.crmCoop.filters) state.ui.crmCoop.filters = { region:"all", country:"all", town:"all", responsible:"all" };
+  state.ui.crmCoop.filters = f;
+
+  filterRow.appendChild(makeSelect("Region", distinctRegion, f.region, (v)=>{ 
+    state.ui.crmCoop.filters.region = v; 
+    // Reset dependent filters when region changes
+    if (state.ui.crmCoop.filters.country !== "all") state.ui.crmCoop.filters.country = "all";
+    if (state.ui.crmCoop.filters.town !== "all") state.ui.crmCoop.filters.town = "all";
+    render(); 
+  }));
+  filterRow.appendChild(makeSelect("Country", distinctCountry, f.country, (v)=>{ 
+    state.ui.crmCoop.filters.country = v; 
+    // Reset dependent filter when country changes
+    if (state.ui.crmCoop.filters.town !== "all") state.ui.crmCoop.filters.town = "all";
+    render(); 
+  }));
+  filterRow.appendChild(makeSelect("Town", distinctTown, f.town, (v)=>{ 
+    state.ui.crmCoop.filters.town = v; 
+    render(); 
+  }));
+  filterRow.appendChild(makeSelect("Responsible", distinctResp, f.responsible, (v)=>{ 
+    state.ui.crmCoop.filters.responsible = v; 
+    render(); 
+  }));
 
   container.appendChild(filterRow);
 
@@ -1222,49 +1385,57 @@ function renderCrmCoop() {
   const table = document.createElement("table");
   table.className = "table";
   table.innerHTML = `
-    <thead>
-      <tr>
-        <th>Email</th>
-        <th>Company</th>
-        <th>Region</th>
-        <th>Country</th>
-        <th>Town</th>
-        <th>Responsible</th>
-        <th>Last updated</th>
-        <th style="width:110px;">Applied</th>
-        <th style="width:90px;">Notes</th>
-        <th style="width:110px;">Message</th>
-      </tr>
-    </thead>
-    <tbody></tbody>
-  `;
+      <thead>
+        <tr>
+          <th style="width:18%; text-align:left;">Email</th>
+          <th style="width:18%; text-align:left;">Company</th>
+          <th style="width:10%; text-align:left;">Region</th>
+          <th style="width:10%; text-align:left;">Country</th>
+          <th style="width:12%; text-align:left;">Town</th>
+          <th style="width:12%; text-align:left;">Responsible</th>
+          <th style="width:12%; text-align:left;">Last updated</th>
+          <th style="width:4%; text-align:center;"></th>
+          <th style="width:2%; text-align:center;"></th>
+          <th style="width:2%; text-align:center;"></th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    `;
   const tbody = table.querySelector("tbody");
 
   filtered.forEach(lead => {
     const tr = document.createElement("tr");
 
     const tdEmail = document.createElement("td");
+    tdEmail.style.backgroundColor = "transparent";
     tdEmail.textContent = lead.email;
 
     const tdCompany = document.createElement("td");
+    tdCompany.style.backgroundColor = "transparent";
     tdCompany.textContent = lead.company || "";
 
     const tdRegion = document.createElement("td");
+    tdRegion.style.backgroundColor = "transparent";
     tdRegion.textContent = lead.region || "";
 
     const tdCountry = document.createElement("td");
+    tdCountry.style.backgroundColor = "transparent";
     tdCountry.textContent = lead.country || "";
 
     const tdTown = document.createElement("td");
+    tdTown.style.backgroundColor = "transparent";
     tdTown.textContent = lead.town || "";
 
     const tdResp = document.createElement("td");
+    tdResp.style.backgroundColor = "transparent";
     tdResp.textContent = lead.responsible || "";
 
     const tdLast = document.createElement("td");
+    tdLast.style.backgroundColor = "transparent";
     tdLast.textContent = lead.lastUpdated || "";
 
     const tdApplied = document.createElement("td");
+    tdApplied.style.backgroundColor = "transparent";
     const appliedWrap = document.createElement("div");
     appliedWrap.style.display = "flex";
     appliedWrap.style.alignItems = "center";
@@ -1287,6 +1458,7 @@ function renderCrmCoop() {
     tdApplied.appendChild(appliedWrap);
 
     const tdNotes = document.createElement("td");
+    tdNotes.style.backgroundColor = "transparent";
     const noteBtn = document.createElement("button");
     noteBtn.className = "btn btn-secondary";
     noteBtn.type = "button";
@@ -1296,6 +1468,7 @@ function renderCrmCoop() {
     tdNotes.appendChild(noteBtn);
 
     const tdMsg = document.createElement("td");
+    tdMsg.style.backgroundColor = "transparent";
     const msgBtn = document.createElement("button");
     msgBtn.className = "btn btn-secondary";
     msgBtn.type = "button";
@@ -1454,7 +1627,7 @@ function renderCrmCoopNotesModal() {
   const save = document.createElement("button");
   save.className = "btn btn-primary";
   save.type = "button";
-  save.textContent = "Save";
+  save.textContent = "Create";
   save.onclick = () => {
     const t = String(textarea.value || "").trim();
     if (t) crmCoopAddNote(email, t);
@@ -1619,7 +1792,7 @@ function renderCrmCoopMessageNewModal() {
   const save = document.createElement("button");
   save.className = "btn btn-primary";
   save.type = "button";
-  save.textContent = "Save";
+  save.textContent = "Create";
   save.onclick = () => {
     crmCoopAddMessage(email, subject.value, msg.value);
     openModal("crm-coop-messages", { email });
@@ -1631,16 +1804,280 @@ function renderCrmCoopMessageNewModal() {
 }
 
 
-function renderCRM() {
-  const wrap = document.createElement("div");
-  wrap.setAttribute("data-owned", "app");
-  wrap.style.padding = "24px";
-  wrap.innerHTML = `
-    <h2 style="margin:0 0 6px;">CRM</h2>
-    <p style="opacity:.7; margin:0;">To be added.</p>
-  `;
-  return wrap;
+
+function renderFormDesign() {
+  const container = document.createElement("div");
+  container.setAttribute("data-owned", "app");
+
+  const extras = [];
+
+  if (!state.ui) state.ui = {};
+  if (!state.ui.formDesign) state.ui.formDesign = {};
+  if (!state.ui.formDesign.lastEmail) state.ui.formDesign.lastEmail = randomEmail();
+
+  // Auto-open once per visit to the tab
+  if (!state.ui.formDesign.openedOnce) {
+    state.ui.formDesign.openedOnce = true;
+    openModal("form-design", { email: state.ui.formDesign.lastEmail });
+  }
+
+  const openBtn = document.createElement("button");
+  openBtn.className = "btn btn-secondary";
+  openBtn.type = "button";
+  openBtn.textContent = "Open form";
+  openBtn.addEventListener("click", () => {
+    state.ui.formDesign.lastEmail = randomEmail();
+    openModal("form-design", { email: state.ui.formDesign.lastEmail });
+    render();
+  });
+  extras.push(openBtn);
+
+  const header = renderHeaderRow("Form design", extras);
+  container.appendChild(header);
+
+  const hint = document.createElement("div");
+  hint.style.margin = "16px 24px";
+  hint.style.color = "rgba(0,0,0,0.65)";
+  hint.textContent = "Preview the external customer application form.";
+  container.appendChild(hint);
+
+  return container;
 }
+
+function renderFormDesignModal() {
+  const data = (state.modal && state.modal.data) ? state.modal.data : {};
+  const emailValue = String(data.email || randomEmail());
+
+  const box = document.createElement("div");
+  box.className = "modal-box";
+  box.style.width = "min(720px, 92vw)";
+  box.style.borderRadius = "22px";
+  box.style.background = "#fff";
+  box.style.boxShadow = "0 18px 50px rgba(0,0,0,0.18)";
+  box.style.overflow = "hidden";
+
+  const header = document.createElement("div");
+  header.style.padding = "18px 20px";
+  header.style.borderBottom = "1px solid rgba(0,0,0,0.08)";
+  header.style.display = "flex";
+  header.style.alignItems = "center";
+  header.style.justifyContent = "space-between";
+
+  const title = document.createElement("div");
+  title.style.fontSize = "18px";
+  title.style.fontWeight = "700";
+  title.textContent = "Apply for an account";
+
+  const closeBtn = document.createElement("button");
+  closeBtn.className = "btn btn-secondary";
+  closeBtn.type = "button";
+  closeBtn.textContent = "Close";
+  closeBtn.addEventListener("click", closeModal);
+
+  header.append(title, closeBtn);
+
+  const body = document.createElement("div");
+  body.style.padding = "18px 20px 20px";
+
+  const grid = document.createElement("div");
+  grid.style.display = "grid";
+  grid.style.gridTemplateColumns = "1fr 1fr";
+  grid.style.gap = "14px 14px";
+
+  const mkInput = (type="text", readOnly=false, value="") => {
+    const el = document.createElement("input");
+    el.type = type;
+    el.value = value;
+    el.readOnly = readOnly;
+    el.style.width = "100%";
+    el.style.padding = "12px 12px";
+    el.style.borderRadius = "12px";
+    el.style.border = "1px solid rgba(0,0,0,0.14)";
+    el.style.outline = "none";
+    el.style.fontSize = "14px";
+    if (readOnly) el.style.background = "rgba(0,0,0,0.03)";
+    return el;
+  };
+
+  const mkField = (labelText, control, span2=false) => {
+    const wrap = document.createElement("div");
+    if (span2) wrap.style.gridColumn = "1 / -1";
+
+    const lbl = document.createElement("div");
+    lbl.style.fontSize = "12px";
+    lbl.style.fontWeight = "700";
+    lbl.style.color = "rgba(0,0,0,0.55)";
+    lbl.style.marginBottom = "6px";
+    lbl.textContent = labelText;
+
+    wrap.append(lbl, control);
+    return wrap;
+  };
+
+  const email = mkInput("email", true, emailValue);
+  const firstName = mkInput("text", false, "");
+  const lastName = mkInput("text", false, "");
+  const company = mkInput("text", false, "");
+
+  const message = document.createElement("textarea");
+  message.rows = 5;
+  message.style.resize = "vertical";
+  message.style.width = "100%";
+  message.style.padding = "12px 12px";
+  message.style.borderRadius = "12px";
+  message.style.border = "1px solid rgba(0,0,0,0.14)";
+  message.style.outline = "none";
+  message.style.fontSize = "14px";
+
+  grid.append(
+    mkField("Email", email, true),
+    mkField("First name", firstName),
+    mkField("Last name", lastName),
+    mkField("Company", company, true),
+    mkField("Message", message, true)
+  );
+
+  const footer = document.createElement("div");
+  footer.style.marginTop = "16px";
+  footer.style.display = "flex";
+  footer.style.justifyContent = "flex-end";
+
+  const applyBtn = document.createElement("button");
+  applyBtn.className = "btn btn-primary";
+  applyBtn.type = "button";
+  applyBtn.textContent = "Apply for an account";
+  applyBtn.addEventListener("click", () => {
+    alert("to be added.");
+  });
+
+  footer.appendChild(applyBtn);
+
+  body.append(grid, footer);
+  box.append(header, body);
+  return box;
+}
+function renderCRM() {
+  const container = document.createElement("div");
+  container.setAttribute("data-owned", "app");
+
+  if (!state.ui) state.ui = {};
+  if (!state.ui.crm) state.ui.crm = {};
+
+  if (typeof state.ui.crm.showInfo !== "boolean") state.ui.crm.showInfo = true;
+  if (!Array.isArray(state.ui.crm.lastUploadRows)) state.ui.crm.lastUploadRows = [];
+
+  const extras = [];
+
+  // Upload button (placed in header where Back used to be)
+  const uploadBtn = document.createElement("button");
+  uploadBtn.className = "btn btn-secondary";
+  uploadBtn.type = "button";
+  uploadBtn.textContent = "Upload";
+
+  // Hidden file input (triggered by Upload)
+  const fileInput = document.createElement("input");
+  fileInput.type = "file";
+  fileInput.accept = ".xlsx,.xls";
+  fileInput.style.display = "none";
+
+  uploadBtn.addEventListener("click", () => {
+    state.ui.crm.showInfo = false;
+    fileInput.value = ""; // allow selecting same file again
+    fileInput.click();
+    render(); // remove info box immediately
+  });
+
+  fileInput.addEventListener("change", async () => {
+    if (!fileInput.files || !fileInput.files[0]) return;
+    if (!window.XLSX) {
+      alert("XLSX-bibliotek saknas (script-tag).");
+      return;
+    }
+
+    try {
+      const buf = await fileInput.files[0].arrayBuffer();
+
+      // Rows from Excel (deduped by email)
+      const incoming = dedupeByEmail(parseCrmRowsFromXlsx(buf));
+      state.ui.crm.shopifyProcessed = false;
+
+      state.ui.crm.lastUploadRows = (incoming || []).map(r => ({ ...r, shopify: r.shopify || "", mailSent: r.mailSent || "" }));
+
+      // Persist only new emails to DB
+      const db = loadCrmDb();
+      const existingEmails = new Set(db.map(x => normalizeEmail(x.email)));
+      const unique = incoming.filter(r => !existingEmails.has(normalizeEmail(r.email)));
+
+      // Store category in legacy field "country" for backwards compatibility
+      const toAdd = unique.map(r => ({
+        email: normalizeEmail(r.email),
+        company: "",
+        country: String(r.country || "").trim()
+      }));
+
+      saveCrmDb(db.concat(toAdd));
+      saveCrmLastUnique(unique);
+
+      // Open the table modal
+      openModal("crm-prospects", {});
+      render();
+    } catch (e) {
+      console.error(e);
+      alert("Fel vid import. Kontrollera att filen har headers: EMAIL + CATEGORI.");
+    }
+  });
+
+  extras.push(uploadBtn);
+
+  const header = renderHeaderRow("CRM", extras);
+  // Remove Back button explicitly for CRM tab (if header injects it)
+  Array.from(header.querySelectorAll("button")).forEach(btn => {
+    if (btn.textContent && btn.textContent.trim().toLowerCase() === "back") btn.remove();
+  });
+
+  container.appendChild(header);
+  container.appendChild(fileInput);
+
+  // Information box (shown when CRM opens; hidden after Upload)
+  if (state.ui.crm.showInfo) {
+    const infoBox = document.createElement("div");
+    infoBox.style.margin = "16px 24px";
+    infoBox.style.padding = "26px 28px";
+    infoBox.style.border = "6px solid #111";
+    infoBox.style.borderRadius = "28px";
+    infoBox
+    infoBox.style.maxWidth = "820px";
+
+    const p1 = document.createElement("div");
+    p1.style.fontSize = "18px";
+    p1.style.lineHeight = "1.55";
+    p1.textContent = "Här kan du ladda upp en Excel-fil med två kolumner:";
+
+    const codeLine = document.createElement("div");
+    codeLine.style.marginTop = "14px";
+    codeLine.style.fontFamily = "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace";
+    codeLine.style.fontSize = "18px";
+    codeLine.textContent = "EMAIL–CATEGORI";
+
+    const p2 = document.createElement("div");
+    p2.style.marginTop = "14px";
+    p2.style.fontSize = "18px";
+    p2.style.lineHeight = "1.55";
+    p2.innerHTML = 'där CATEGORI = <span style="text-decoration: underline;">contract</span> eller <span style="text-decoration: underline;">architect</span>';
+
+    const p3 = document.createElement("div");
+    p3.style.marginTop = "18px";
+    p3.style.fontSize = "18px";
+    p3.style.lineHeight = "1.55";
+    p3.innerHTML = 'Klicka på <span style="text-decoration: underline;">Upload</span> för att välja en Excel-fil. Tabellen öppnas i en <span style="text-decoration: underline;">popup</span> efter import';
+
+    infoBox.append(p1, codeLine, p2, p3);
+    container.appendChild(infoBox);
+  }
+
+  return container;
+}
+
 
 function renderAnalyticalPO() {
   const container = document.createElement("div");
@@ -1666,8 +2103,8 @@ function renderAnalyticalPO() {
 if (!state.analytical.tempOrder) state.analytical.tempOrder = {}; // sku -> amount
 if (!state.analytical.view) state.analytical.view = "list";       // list | temp
 
-  // Per-SKU data store (stable placeholders + amount input)
-  if (!state.analytical.bySku) state.analytical.bySku = {};           // sku -> { stock1, stock2, sales3, amount }
+  // Per-SKU data store (persisted placeholders + amount input)
+  if (!state.analytical.bySku) state.analytical.bySku = loadAnalyticalSkuDb();           // sku -> { stock1, stock2, sales3, amount }
 
   const FILTERS = [
     ["rugs", "rugs"],
@@ -1689,18 +2126,21 @@ if (!state.analytical.view) state.analytical.view = "list";       // list | temp
   function ensureSkuRecord(sku) {
     if (state.analytical.bySku[sku]) return state.analytical.bySku[sku];
 
-    // Placeholder numbers (stable after first creation)
-    const stock1 = Math.floor(Math.random() * 50);  // 0..49
-    const stock2 = Math.floor(Math.random() * 50);  // 0..49
-    const sales3 = 10 + Math.floor(Math.random() * 140); // 10..149
+    // Persisted placeholders (created once per SKU, then stored locally)
+const stock1 = randInt(1, 10);   // Lager Bhadohi: 1..10
+const stock2 = randInt(2, 15);   // Lager Falköping: 2..15
+const sales3 = randInt(2, 10);   // Sales 3 månader: 2..10
 
-    state.analytical.bySku[sku] = {
-      stock1,
-      stock2,
-      sales3,
-      amount: 0
-    };
-    return state.analytical.bySku[sku];
+state.analytical.bySku[sku] = {
+  stock1,
+  stock2,
+  sales3,
+  inProduction: 0,
+  incoming: 0,
+  amount: 0
+};
+saveAnalyticalSkuDb(state.analytical.bySku);
+return state.analytical.bySku[sku];
   }
 
   function statusColor(sales3, stock1, stock2) {
@@ -1797,7 +2237,39 @@ const shippingAddress =
   };
 
   // Add PO and jump to Purchase Orders
-  state.purchaseOrders.unshift(poObj);
+  if (!Array.isArray(state.purchaseOrders)) state.purchaseOrders = [];
+  // === Inventory rules (Analytical SKU DB) ===
+// On PO creation:
+// - prod_to_local -> increase InProduction by Amount
+// - transfer_aircargo / transfer_boat -> increase Incoming by Amount
+if (!state.analytical.bySku) state.analytical.bySku = loadAnalyticalSkuDb();
+for (const v of (poObj.variants || [])) {
+  const sku = String(v.sku || '').trim();
+  if (!sku) continue;
+  if (!state.analytical.bySku[sku]) {
+    // create a base record if missing (keeps existing random ranges)
+    state.analytical.bySku[sku] = {
+      stock1: randInt(1, 10),
+      stock2: randInt(2, 15),
+      sales3: randInt(2, 10),
+      inProduction: 0,
+      incoming: 0,
+      amount: 0
+    };
+  }
+  const rec = state.analytical.bySku[sku];
+  const amt = Number(v.amount) || 0;
+  if (amt <= 0) continue;
+
+  if (poObj.type === "prod_to_local") {
+    rec.inProduction = (Number(rec.inProduction) || 0) + amt;
+  } else if (poObj.type === "transfer_aircargo" || poObj.type === "transfer_boat") {
+    rec.incoming = (Number(rec.incoming) || 0) + amt;
+  }
+}
+saveAnalyticalSkuDb(state.analytical.bySku);
+
+state.purchaseOrders.unshift(poObj);
   state.activeTab = "purchaseorders";
   // Ensure Purchase Orders shows the active list after creating a PO.
   state.poView = "list";
@@ -1828,16 +2300,26 @@ const hasTempLines = Object.keys(temp).some(
 );
 
 createBtn.disabled = !hasTempLines;
-if (hasTempLines) createBtn.classList.add("btn-ready");
+
+// Visual rule:
+// - Button should be GREEN only when filter === "selected" AND there are selected lines (Amount > 0)
+// - Otherwise keep normal styling (still enabled if hasTempLines)
+const isSelectedFilter = String(state.analytical.filter || "") === "selected";
+if (isSelectedFilter && hasTempLines) createBtn.classList.add("btn-ready");
 else createBtn.classList.remove("btn-ready");
 
 createBtn.title = hasTempLines
-  ? "Create PO from Temporary Order"
-  : "Add Amount > 0 to at least one variant";
+  ? "Create PO from Temporary order"
+  : "Sätt Amount > 0 på minst en variant först";
 
 createBtn.addEventListener("click", () => {
   if (createBtn.disabled) return;
-  createPOFromAnalytical();
+  try {
+    createPOFromAnalytical();
+  } catch (e) {
+    console.error(e);
+    alert("CreatePO failed: " + (e && e.message ? e.message : String(e)));
+  }
 });
 
 
@@ -1979,7 +2461,7 @@ if (filterVal === "selected") {
   [stock1Label, "9%"],
   [stock2Label, "9%"],
   ["InComing", "9%"],
-  ["Sales-3", "10%"],
+  ["Sales 3 månader", "10%"],
   ["Status", "8%"],
   ["Amount", "10%"],
   ["Action", "10%"],
@@ -2006,10 +2488,11 @@ if (filterVal === "selected") {
 
     // highlight row if Amount > 0
     const isDone = Number(rec.amount) > 0;
-    if (isDone) tr.style.background = "rgba(34, 197, 94, 0.08)"; // light green tint
+    if (isDone) tr // light green tint
 
     // Variant
     const tdVar = document.createElement("td");
+    tdVar.style.backgroundColor = "transparent";
     tdVar.textContent = p.name;
 tdVar.style.textAlign = "left";
 tdVar.style.padding = "12px 10px";
@@ -2017,24 +2500,29 @@ tdVar.style.overflow = "hidden";
 tdVar.style.textOverflow = "ellipsis";
 tdVar.style.whiteSpace = "nowrap";
 
-    // InProduction (sum of ordered amount for this SKU across all POs)
+    // InProduction (tracked per rules from PO actions)
     const tdInProd = document.createElement("td");
+    tdInProd.style.backgroundColor = "transparent";
     tdInProd.textContent = String(inProductionForSku(p.sku) ?? 0);
     tdInProd.style.textAlign = "center";
     tdInProd.style.padding = "12px 10px";
 
     // Lager 1 / Lager 2
     const tdS1 = document.createElement("td");
+    tdS1.style.backgroundColor = "transparent";
     tdS1.textContent = String(rec.stock1 ?? 0);
 
     const tdS2 = document.createElement("td");
+    tdS2.style.backgroundColor = "transparent";
     tdS2.textContent = String(rec.stock2 ?? 0);
 
     // InComing (transfer POs + Dispatch)
     const tdIncoming = document.createElement("td");
+    tdIncoming.style.backgroundColor = "transparent";
     tdIncoming.textContent = String(incomingForSku(p.sku) ?? 0);
 
     const tdSales = document.createElement("td");
+    tdSales.style.backgroundColor = "transparent";
     tdSales.textContent = String(rec.sales3 ?? 0);
 tdS1.style.textAlign = "center";
 tdS2.style.textAlign = "center";
@@ -2047,6 +2535,7 @@ tdSales.style.padding = "12px 10px";
 
     // Status
     const tdStatus = document.createElement("td");
+    tdStatus.style.backgroundColor = "transparent";
     const dot = document.createElement("span");
     tdStatus.style.textAlign = "center";
 tdStatus.style.padding = "12px 10px";
@@ -2063,6 +2552,7 @@ dot.style.boxShadow = "0 0 0 3px rgba(0,0,0,0.04)";
 
     // Amount input
     const tdAmt = document.createElement("td");
+    tdAmt.style.backgroundColor = "transparent";
         tdAmt.style.textAlign = "center";
 tdAmt.style.padding = "10px";
     const amt = document.createElement("input");
@@ -2106,6 +2596,7 @@ else tr.classList.remove("ap-done");
 
     // Action: analyze
     const tdAction = document.createElement("td");
+    tdAction.style.backgroundColor = "transparent";
     tdAction.style.textAlign = "center";
     tdAction.style.padding = "10px";
     const analyzeBtn = document.createElement("button");
@@ -2173,6 +2664,48 @@ function renderPurchaseOrders() {
     });
     extras.push(newPo);
   }
+  
+  // ERD filter (based on latest variant ERD; "none" if any ERD missing)
+  if (!state.ui) state.ui = {};
+  if (!state.ui.poErdFilter) state.ui.poErdFilter = "all";
+
+  const erdFilterWrap = document.createElement("div");
+  erdFilterWrap.className = "toolbar-field";
+  const erdLabel = document.createElement("div");
+  erdLabel.className = "toolbar-label";
+  erdLabel.textContent = "ERD";
+  const erdSelect = document.createElement("select");
+  erdSelect.className = "input";
+  erdSelect.style.minWidth = "160px";
+
+  // Build options from current list (manufacturer filtered)
+  const listForFilterRaw = isArchiveView
+    ? (Array.isArray(state.archive) ? state.archive : [])
+    : (Array.isArray(state.purchaseOrders) ? state.purchaseOrders : []);
+  const listForFilter = filterPosByActiveManufacturer(listForFilterRaw);
+
+  const values = new Set();
+  values.add("none");
+  listForFilter.forEach(po => values.add(poErdValue(po).value));
+  const dates = Array.from(values).filter(v => v && v !== "none").sort((a,b) => String(b).localeCompare(String(a)));
+  const options = ["all", "none", ...dates];
+
+  options.forEach(v => {
+    const o = document.createElement("option");
+    o.value = v;
+    o.textContent = v === "all" ? "All" : v;
+    erdSelect.appendChild(o);
+  });
+
+  erdSelect.value = state.ui.poErdFilter || "all";
+  erdSelect.addEventListener("change", () => {
+    state.ui.poErdFilter = erdSelect.value;
+    render();
+  });
+
+  erdFilterWrap.append(erdLabel, erdSelect);
+  extras.push(erdFilterWrap);
+
   container.appendChild(renderHeaderRow("Purchase Orders", extras));
 
   const wrap = document.createElement("div");
@@ -2191,6 +2724,7 @@ function renderPurchaseOrders() {
         <th>Qty</th>
         <th>Delivery</th>
         <th>Date</th>
+        <th>ERD</th>
         <th>Shipping Adress</th>
         <th>Incoterms</th>
         <th>Actions</th>
@@ -2204,7 +2738,13 @@ function renderPurchaseOrders() {
     ? (Array.isArray(state.archive) ? state.archive : [])
     : (Array.isArray(state.purchaseOrders) ? state.purchaseOrders : []);
 
-  const list = filterPosByActiveManufacturer(listRaw);
+  let list = filterPosByActiveManufacturer(listRaw);
+  // Apply ERD filter + sort
+  const erdFilter = state.ui?.poErdFilter || "all";
+  if (erdFilter !== "all") {
+    list = list.filter(po => poErdValue(po).value === erdFilter);
+  }
+  list = list.slice().sort(comparePoByErd);
 
   list.forEach(po => {
     const isExpanded = state.expandedPoId === po.id;
@@ -2226,6 +2766,7 @@ function renderPurchaseOrders() {
       <td>${escapeHtml(String(poQty(po)))}</td>
       <td>${escapeHtml(po.delivery || "")}</td>
       <td>${escapeHtml(po.date || "")}</td>
+      <td>${escapeHtml(poErdValue(po).value)}</td>
       <td class="shipping">${multilineToHtml(po.shippingAddress || "")}</td>
       <td>${escapeHtml(po.incoterms || "")}</td>
       <td class="po-actions-cell"></td>
@@ -2267,6 +2808,7 @@ function renderPurchaseOrders() {
     const actions = document.createElement('div');
     actions.className = 'po-actions';
 
+
     
     // In archive view, POs are locked (no actions / no edits).
     if (isArchiveView) {
@@ -2276,7 +2818,7 @@ function renderPurchaseOrders() {
       if (isExpanded) {
         const detailTr = document.createElement("tr");
         const td = document.createElement("td");
-        td.colSpan = 11;
+        td.colSpan = 12;
 
         const details = document.createElement("div");
         details.className = "details";
@@ -2392,10 +2934,23 @@ head.innerHTML = `
   <div>Amount</div>
   <div>ERD</div>
   <div>Notes</div>
-  <div>Actions</div>
+  <div style="display:flex; align-items:center; justify-content:flex-end; gap:8px;">
+    <span>Actions</span>
+    <button class="pill pill-secondary" type="button" data-action="variant-newrow">NewRow</button>
+  </div>
 `;
 
   wrap.appendChild(head);
+  // Header NewRow: add a new variant row to this PO
+  const headerNewRowBtn = head.querySelector('[data-action="variant-newrow"]');
+  if (headerNewRowBtn) {
+    headerNewRowBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      closeMenus();
+      openModal("new-row", { poId: po.id });
+    });
+  }
+
 
   po.variants.forEach(v => {
     const row = document.createElement("div");
@@ -2547,6 +3102,7 @@ head.innerHTML = `
       }
 
       actionsCell.appendChild(menuWrap);
+
     } else {
       actionsCell.textContent = "";
     }
@@ -2562,7 +3118,30 @@ head.innerHTML = `
 function deleteVariant(poId, variantId) {
   const po = state.purchaseOrders.find(p => p.id === poId);
   if (!po) return;
-  po.variants = (po.variants || []).filter(v => v.id !== variantId);
+
+  const vars = Array.isArray(po.variants) ? po.variants : [];
+  const v = vars.find(x => x.id === variantId);
+  if (!v) return;
+
+  // === Inventory rules on variant delete (Analytical SKU DB) ===
+  // - prod_to_local  -> decrease InProduction by Amount
+  // - transfer_*     -> decrease Incoming by Amount
+  if (!state.analytical) state.analytical = {};
+  if (!state.analytical.bySku) state.analytical.bySku = loadAnalyticalSkuDb();
+
+  const sku = String(v.sku || "").trim();
+  const amt = Number(v.amount) || 0;
+  if (sku && amt > 0) {
+    const rec = ensureSkuRecord(sku);
+    if (po.type === "prod_to_local") {
+      rec.inProduction = Math.max(0, (Number(rec.inProduction) || 0) - amt);
+    } else if (po.type === "transfer_aircargo" || po.type === "transfer_boat") {
+      rec.incoming = Math.max(0, (Number(rec.incoming) || 0) - amt);
+    }
+    saveAnalyticalSkuDb(state.analytical.bySku);
+  }
+
+  po.variants = vars.filter(x => x.id !== variantId);
 }
 
 /* =========================
@@ -3013,17 +3592,11 @@ function renderArchive(source) {
     `;
     const tb = t.querySelector("tbody");
     rows.forEach(r => {
-      const tr = document.createElement("tr");
-      const count = Array.isArray(r.pos) ? r.pos.length : 0;
-      tr.innerHTML = `
-        <td>${escapeHtml(String(r.date || ""))}</td>
-        <td>${escapeHtml(String(r.content || ""))}</td>
-        <td>${escapeHtml(String(r.doneAt ? new Date(r.doneAt).toLocaleString() : ""))}</td>
-        <td>${escapeHtml(String(count))}</td>
-      `;
-      tb.appendChild(tr);
-    });
-    wrap.appendChild(t);
+  r.shopify = (Math.random() < 0.5) ? "yes" : "no";
+  // Rule: Shopify=yes => Mail sent=yes, otherwise no
+  r.mailSent = (r.shopify === "yes") ? "yes" : "no";
+});
+wrap.appendChild(t);
     return wrap;
   }
 
@@ -3087,19 +3660,283 @@ function renderLogin() {
 ========================= */
 function openModal(kind, data) {
   console.log("[openModal]", kind, data);
-state.modal.open = true;
-  state.modal.kind = kind;
-  state.modal.data = data || {};
+  state.modal = {
+    open: true,
+    kind,
+    data: data || {}
+  };
   closeMenus();
   render();
 }
+
+
 function closeModal() {
+  if (state.modal && state.modal.kind === "crm-prospects") {
+    if (state.ui && state.ui.crm) {
+      state.ui.crm.lastUploadRows = [];
+      state.ui.crm.shopifyProcessed = false;
+      state.ui.crm.showInfo = true;
+    }
+    try { saveCrmLastUnique([]); } catch {}
+  }
+  const backdrop = document.querySelector("#modalRoot .modal-backdrop");
+  if (backdrop) {
+    const box = backdrop.querySelector(".modal-box");
+
+    backdrop.style.opacity = "0";
+    if (box) {
+      box.style.transform = "scale(0.98)";
+      box.style.opacity = "0";
+    }
+
+    const onKeyDown = backdrop._onKeyDown;
+    if (onKeyDown) {
+      try { window.removeEventListener("keydown", onKeyDown); } catch {}
+    }
+
+    const prevOverflow = backdrop.dataset.prevOverflow || "";
+    setTimeout(() => {
+      try { document.body.style.overflow = prevOverflow; } catch {}
+      if (state.modal) state.modal.open = false;
+      try { backdrop.remove(); } catch {}
+      render();
+    }, 180);
+
+    return;
+  }
+
+  if (!state.modal) state.modal = { open: false, kind: "", data: {} };
   state.modal.open = false;
-  state.modal.kind = null;
-  state.modal.data = {};
-  closeMenus();
   render();
 }
+
+
+
+
+function renderCrmProspectsModal() {
+  const wrap = document.createElement("div");
+  wrap.className = "modal-box";
+        wrap.style.borderRadius = "40px";
+  wrap.style.overflow = "hidden";
+  // Size: hug the table instead of creating empty space
+  wrap.style.display = "inline-block";
+  wrap.style.width = "fit-content";
+  wrap.style.maxWidth = "92vw";
+
+  wrap
+  wrap.style.boxShadow = "0 18px 50px rgba(0,0,0,0.18)";
+  wrap.style.margin = "0";
+
+  // Top bar
+  const top = document.createElement("div");
+  top.style.display = "flex";
+  top.style.alignItems = "center";
+  top.style.justifyContent = "space-between";
+  top.style.gap = "12px";
+  top.style.padding = "18px 20px";
+  top
+  top.style.borderBottom = "1px solid rgba(0,0,0,0.06)";
+
+  const titleWrap = document.createElement("div");
+
+  const title = document.createElement("div");
+  title.style.fontWeight = "900";
+  title.style.fontSize = "18px";
+  title.textContent = "Här är dina prospects";
+
+  const sub = document.createElement("div");
+  sub.style.marginTop = "6px";
+  sub.style.fontSize = "12px";
+  sub.style.opacity = ".7";
+  sub.textContent = "EMAIL • CATEGORI • MAIL SENT";
+
+  titleWrap.append(title, sub);
+
+  const actions = document.createElement("div");
+  actions.style.display = "flex";
+  actions.style.gap = "10px";
+  actions.style.alignItems = "center";
+  actions.style.flexWrap = "wrap";
+  actions.style.justifyContent = "flex-end";
+
+  const toShopifyBtn = document.createElement("button");
+  toShopifyBtn.className = "btn btn-primary";
+  toShopifyBtn.type = "button";
+  toShopifyBtn.textContent = "ToShopify";
+
+  const alreadyRun = !!(state.ui && state.ui.crm && state.ui.crm.shopifyProcessed);
+  if (alreadyRun) {
+    toShopifyBtn.disabled = true;
+    toShopifyBtn.style.opacity = "0.5";
+    toShopifyBtn.style.cursor = "not-allowed";
+  }
+
+  const closeBtn = document.createElement("button");
+  closeBtn.className = "btn btn-secondary";
+  closeBtn.type = "button";
+  closeBtn.textContent = "Close";
+  closeBtn.addEventListener("click", () => {
+    if (state.ui && state.ui.crm) {
+      state.ui.crm.lastUploadRows = [];
+      state.ui.crm.shopifyProcessed = false;
+      state.ui.crm.showInfo = true;
+    }
+    try { saveCrmLastUnique([]); } catch {}
+    closeModal();
+  });
+actions.append(toShopifyBtn, closeBtn);
+  top.append(titleWrap, actions);
+
+  // Body
+  const body = document.createElement("div");
+  body.className = "modal-body";
+  body.style.padding = "16px 18px 18px";
+  body
+  body.style.display = "flex";
+  body.style.flexDirection = "column";
+  body.style.alignItems = "flex-start";
+
+  const rows = (state.ui && state.ui.crm && Array.isArray(state.ui.crm.lastUploadRows))
+    ? state.ui.crm.lastUploadRows
+    : [];
+
+  // Small helper line above table
+  const meta = document.createElement("div");
+  meta.style.display = "flex";
+  meta.style.alignItems = "center";
+  meta.style.justifyContent = "space-between";
+  meta.style.gap = "10px";
+  meta.style.marginBottom = "10px";
+
+  const count = document.createElement("div");
+  count.style.fontSize = "12px";
+  count.style.opacity = ".7";
+  count.textContent = `${rows.length} rader`;
+
+  meta.appendChild(count);
+  body.appendChild(meta);
+
+  const divider = document.createElement("div");
+  divider.style.height = "1px";
+  divider
+  divider.style.margin = "10px 0 14px";
+  body.appendChild(divider);
+
+  toShopifyBtn.addEventListener("click", () => {
+    // Run once
+    if (state.ui && state.ui.crm && state.ui.crm.shopifyProcessed) return;
+
+    rows.forEach(r => {
+      r.shopify = (Math.random() < 0.5) ? "yes" : "no";
+      // Rules:
+      // Shopify=yes => Mail sent=yes
+      // Shopify=no  => Mail sent=no
+      r.mailSent = (r.shopify === "yes") ? "yes" : "no";
+    });
+
+    if (state.ui && state.ui.crm) {
+      state.ui.crm.lastUploadRows = rows;
+      state.ui.crm.shopifyProcessed = true;
+    }
+
+    // Dim/disable after click
+    toShopifyBtn.disabled = true;
+    toShopifyBtn.style.opacity = "0.5";
+    toShopifyBtn.style.cursor = "not-allowed";
+
+    render();
+    alert("Alla rader har gåtts igenom");
+  });
+
+  const scroll = document.createElement("div");
+  scroll.style.maxHeight = "62vh";
+  scroll.style.width = "fit-content";
+  scroll.style.maxWidth = "92vw";
+  scroll.style.overflow = "auto";
+  scroll.style.overflowX = "hidden";
+  scroll.style.boxSizing = "border-box";
+  scroll.style.padding = "0";
+  scroll.style.scrollbarGutter = "stable";
+
+  // Ensure right-side framing matches left even with scrollbar
+  scroll.style.boxSizing = "border-box";
+  scroll.style.paddingRight = "0";
+  scroll.style.scrollbarGutter = "stable";
+    scroll.style.padding = "0";
+  scroll.style.border = "2px solid rgba(0,0,0,0.12)";
+  scroll.style.borderRadius = "18px";
+  scroll
+
+  const table = document.createElement("table");
+  table.className = "table";
+  table.style.width = "100%";
+  table.style.margin = "0";
+  table.style.borderCollapse = "collapse";
+  
+
+  table.innerHTML = `
+    <thead>
+      <tr>
+        <th style="width:56%; text-align:left; position:sticky; top:0; background:transparent; z-index:1; padding-left:16px; padding-top:16px; padding-bottom:16px;">EMAIL</th>
+        <th style="width:20%; text-align:center; position:sticky; top:0; background:transparent; z-index:1; padding:16px 12px;">CATEGORI</th>
+        <th style="width:12%; text-align:center; position:sticky; top:0; background:transparent; z-index:1; padding:16px 12px;">SHOPIFY</th>
+        <th style="width:12%; text-align:center; position:sticky; top:0; background:transparent; z-index:1; padding:16px 12px;">MAIL SENT</th>
+      </tr>
+    </thead>
+    <tbody></tbody>
+  `;
+
+  const tbody = table.querySelector("tbody");
+  rows.forEach((r, i) => {
+    const tr = document.createElement("tr");
+
+    const ms = String(r.mailSent || "").trim().toLowerCase();
+    if (ms === "yes") {
+      tr.style.backgroundColor = "rgba(34,197,94,0.18)";
+    } else if (i % 2 === 1) {
+      tr.style.backgroundColor = "rgba(0,0,0,0.03)";
+    }
+    if (String(r.mailSent).toLowerCase() === "yes") {
+    }
+    if (i % 2 === 1) tr
+
+    const tdEmail = document.createElement("td");
+    tdEmail.style.backgroundColor = "transparent";
+    tdEmail.textContent = r.email;
+    tdEmail.style.textAlign = "left";
+    tdEmail.style.paddingLeft = "14px";
+
+    const tdCat = document.createElement("td");
+    tdCat.style.backgroundColor = "transparent";
+    tdCat.textContent = String(r.country || "");
+    tdCat.style.textAlign = "center";
+    tdCat.style.padding = "18px 12px";
+
+    const tdShopify = document.createElement("td");
+    tdShopify.style.backgroundColor = "transparent";
+    tdShopify.textContent = String(r.shopify || "");
+    tdShopify.style.textAlign = "center";
+    tdShopify.style.padding = "18px 12px";
+
+    const tdMail = document.createElement("td");
+    tdMail.style.backgroundColor = "transparent";
+    tdMail.textContent = String(r.mailSent || "");
+    tdMail.style.textAlign = "center";
+    tdMail.style.padding = "18px 12px";
+
+    tr.append(tdEmail, tdCat, tdShopify, tdMail);
+    tbody.appendChild(tr);
+  });
+
+  scroll.appendChild(table);
+  body.appendChild(scroll);
+
+  wrap.append(top, body);
+  return wrap;
+}
+
+
+
 
 function renderModal() {
   let root = document.getElementById("modalRoot");
@@ -3110,25 +3947,38 @@ function renderModal() {
   }
   root.innerHTML = "";
 
+  if (!state.modal || !state.modal.open) return;
 
-  if (!state.modal.open) {
-    // Important: do not render an invisible backdrop when closed.
-    // Otherwise it may still intercept clicks and make the UI feel "frozen".
-    return;
-  }
-
+  // Backdrop covers viewport and centers the modal box
   const backdrop = document.createElement("div");
   backdrop.className = "modal-backdrop is-open";
-  backdrop.addEventListener("click", (e) => { if (e.target === backdrop) closeModal(); });
+  backdrop.style.position = "fixed";
+  backdrop.style.inset = "0";
+  backdrop.style.display = "flex";
+  backdrop.style.alignItems = "center";
+  backdrop.style.justifyContent = "center";
+  backdrop.style.padding = "24px";
+  backdrop
+  backdrop.style.zIndex = "1000";
+  backdrop.style.opacity = "0";
+  backdrop.style.transition = "opacity 180ms ease";
 
+  backdrop.addEventListener("click", (e) => {
+    if (e.target === backdrop) closeModal();
+  });
+
+  // Container that holds the actual modal box
   const modal = document.createElement("div");
   modal.className = "modal";
   modal.addEventListener("click", (e) => e.stopPropagation());
 
+  // Render the correct modal content (must return an element with class .modal-box)
   if (state.modal.kind === "create-po") modal.appendChild(renderCreatePoModal());
   if (state.modal.kind === "new-row") modal.appendChild(renderNewRowModal());
   if (state.modal.kind === "new-dispatch") modal.appendChild(renderNewDispatchModal());
   if (state.modal.kind === "settings") modal.appendChild(renderSettingsModal());
+  if (state.modal.kind === "crm-prospects") modal.appendChild(renderCrmProspectsModal());
+  if (state.modal.kind === "form-design") modal.appendChild(renderFormDesignModal());
 
   // CRM Coop modals
   if (state.modal.kind === "crm-coop-upload") modal.appendChild(renderCrmCoopUploadModal());
@@ -3139,7 +3989,37 @@ function renderModal() {
 
   backdrop.appendChild(modal);
   root.appendChild(backdrop);
+
+  // Lock background scroll while open
+  const prevOverflow = document.body.style.overflow;
+  backdrop.dataset.prevOverflow = prevOverflow || "";
+  document.body.style.overflow = "hidden";
+
+  // ESC closes modal
+  const onKeyDown = (e) => {
+    if (e.key === "Escape") closeModal();
+  };
+  window.addEventListener("keydown", onKeyDown);
+  backdrop._onKeyDown = onKeyDown;
+
+  // Animate in (fade + slight scale)
+  const box = backdrop.querySelector(".modal-box");
+  if (box) {
+    box.style.transformOrigin = "50% 40%";
+    box.style.transform = "scale(0.98)";
+    box.style.opacity = "0";
+    box.style.transition = "transform 200ms ease, opacity 200ms ease";
+  }
+
+  requestAnimationFrame(() => {
+    backdrop.style.opacity = "1";
+    if (box) {
+      box.style.transform = "scale(1)";
+      box.style.opacity = "1";
+    }
+  });
 }
+
 
 function field(labelText) {
   const wrap = document.createElement("div");
@@ -3536,28 +4416,30 @@ function renderNewRowModal() {
 
   const save = document.createElement("button");
   save.className = "btn btn-primary";
-  save.textContent = "Save";
+  save.textContent = "Create";
 
   // ----- Fields -----
 
-  // Name + dropdown
-  const nameField = field("Name");
-  nameField.classList.add("full");
-  const nameInput = inputText("");
-  nameInput.placeholder = "Klicka för att välja…";
-  nameField.appendChild(nameInput);
+  // Category filter (shows all categories)
+  const categoryField = field("Category");
+  const categorySelect = document.createElement("select");
+  categorySelect.className = "input";
+  categoryField.appendChild(categorySelect);
 
-  const suggestBox = document.createElement("div");
-  suggestBox.className = "suggest";
-  suggestBox.style.display = "none";
-  nameField.appendChild(suggestBox);
+  // Variant picker (populated by category)
+  const variantField = field("Välj variant");
+  variantField.classList.add("full");
+  const variantSelect = document.createElement("select");
+  variantSelect.className = "input";
+  variantField.appendChild(variantSelect);
 
+  // Auto-filled fields
   const skuField = field("SKU");
   const skuInput = inputText("");
   skuInput.readOnly = true;
   skuField.appendChild(skuInput);
 
-  const catField = field("Category");
+  const catField = field("Category (auto)");
   const catInput = inputText("");
   catInput.readOnly = true;
   catField.appendChild(catInput);
@@ -3570,9 +4452,10 @@ function renderNewRowModal() {
   amtInput.step = "1";
   amtInput.className = "input";
   amtInput.value = "";
+  // Amount is typically short; keep it narrow if CSS supports it.
   amtField.appendChild(amtInput);
 
-  // Notes (TXT icon + textarea)
+  // Notes (TXT icon + textarea) — optional
   const notesField = field("Notes");
   notesField.classList.add("full");
 
@@ -3604,9 +4487,8 @@ function renderNewRowModal() {
   notesField.appendChild(notesBtn);
   notesField.appendChild(notesArea);
 
-  // Design (PDF icon + upload)
+  // Design (PDF icon + upload) — optional
   const designField = field("Design");
-
   const designBtn = document.createElement("button");
   designBtn.type = "button";
   designBtn.className = "pdf-icon empty";
@@ -3637,65 +4519,81 @@ function renderNewRowModal() {
   designField.appendChild(designFileInput);
 
   // ----- Selection logic -----
+  const productDb = productDbForActiveManufacturer();
+  const categories = Array.from(new Set(productDb.map(p => p.category))).filter(Boolean).sort((a,b)=>String(a).localeCompare(String(b)));
+
+  let selectedCategory = "all";
   let selectedProduct = null;
 
   function setSelectedProduct(p) {
-    selectedProduct = p;
-    nameInput.value = p.name;
+    selectedProduct = p || null;
+    if (!p) {
+      skuInput.value = "";
+      catInput.value = selectedCategory === "all" ? "" : selectedCategory;
+      syncDisabled();
+      return;
+    }
     skuInput.value = p.sku;
     catInput.value = p.category;
-    suggestBox.style.display = "none";
-    suggestBox.innerHTML = "";
     syncDisabled();
   }
 
-  function hideSuggestions() {
-    suggestBox.style.display = "none";
-    suggestBox.innerHTML = "";
-  }
+  function rebuildCategoryOptions() {
+    categorySelect.innerHTML = "";
+    const optAll = document.createElement("option");
+    optAll.value = "all";
+    optAll.textContent = "All categories";
+    categorySelect.appendChild(optAll);
 
-  function refreshSuggestions(forceShowAll = false) {
-    const q = String(nameInput.value || "").trim();
-    const nq = normalize(q);
-
-    const hits = productDbForActiveManufacturer()
-      .filter(p => {
-        if (forceShowAll && !q) return true;
-        if (!q) return true;
-        return normalize(p.name).includes(nq);
-      })
-      .slice(0, 12);
-
-    if (hits.length === 0) {
-      hideSuggestions();
-      return;
-    }
-
-    suggestBox.innerHTML = "";
-    hits.forEach(p => {
-      const b = document.createElement("button");
-      b.type = "button";
-      b.innerHTML = `${escapeHtml(p.name)} <small>(${escapeHtml(p.sku)} · ${escapeHtml(p.category)})</small>`;
-      b.addEventListener("click", () => setSelectedProduct(p));
-      suggestBox.appendChild(b);
+    categories.forEach(c => {
+      const o = document.createElement("option");
+      o.value = c;
+      o.textContent = c;
+      categorySelect.appendChild(o);
     });
 
-    suggestBox.style.display = "block";
+    categorySelect.value = selectedCategory;
   }
 
-  nameInput.addEventListener("focus", () => refreshSuggestions(true));
-  nameInput.addEventListener("click", () => refreshSuggestions(true));
+  function rebuildVariantOptions() {
+    variantSelect.innerHTML = "";
 
-  nameInput.addEventListener("input", () => {
+    const placeholder = document.createElement("option");
+    placeholder.value = "";
+    placeholder.textContent = selectedCategory === "all" ? "Välj kategori först…" : "Välj variant…";
+    variantSelect.appendChild(placeholder);
+
+    const list = productDb
+      .filter(p => selectedCategory === "all" ? true : String(p.category||"") === selectedCategory)
+      .sort((a,b)=>String(a.name||"").localeCompare(String(b.name||"")));
+
+    list.forEach(p => {
+      const o = document.createElement("option");
+      o.value = p.sku; // SKU is unique enough in this app context
+      o.textContent = `${p.name} (${p.sku})`;
+      variantSelect.appendChild(o);
+    });
+
+    variantSelect.value = selectedProduct ? selectedProduct.sku : "";
+  }
+
+  rebuildCategoryOptions();
+  rebuildVariantOptions();
+  setSelectedProduct(null);
+
+  categorySelect.addEventListener("change", () => {
+    selectedCategory = categorySelect.value || "all";
     selectedProduct = null;
+    catInput.value = selectedCategory === "all" ? "" : selectedCategory;
     skuInput.value = "";
-    catInput.value = "";
-    refreshSuggestions(false);
+    rebuildVariantOptions();
     syncDisabled();
   });
 
-  nameInput.addEventListener("blur", () => {
-    setTimeout(hideSuggestions, 150);
+  variantSelect.addEventListener("change", () => {
+    const sku = variantSelect.value;
+    const p = productDb.find(x => String(x.sku||"") === String(sku||""));
+    setSelectedProduct(p || null);
   });
 
   // ----- Save logic -----
@@ -3737,11 +4635,28 @@ function renderNewRowModal() {
       erdOriginal: ""
     });
 
+    // === Inventory rules on variant add (Analytical SKU DB) ===
+    // - prod_to_local  -> increase InProduction by Amount
+    // - transfer_*     -> increase Incoming by Amount
+    if (!state.analytical) state.analytical = {};
+    if (!state.analytical.bySku) state.analytical.bySku = loadAnalyticalSkuDb();
+
+    const sku = String(selectedProduct.sku || "").trim();
+    if (sku && amt > 0) {
+      const rec = ensureSkuRecord(sku);
+      if (po.type === "prod_to_local") {
+        rec.inProduction = (Number(rec.inProduction) || 0) + amt;
+      } else if (po.type === "transfer_aircargo" || po.type === "transfer_boat") {
+        rec.incoming = (Number(rec.incoming) || 0) + amt;
+      }
+      saveAnalyticalSkuDb(state.analytical.bySku);
+    }
+
     closeModal();
   };
 
   // Layout
-  grid.append(nameField, skuField, catField, amtField, designField, notesField);
+  grid.append(categoryField, variantField, skuField, catField, amtField, designField, notesField);
   body.appendChild(grid);
 
   footer.append(cancel, save);
@@ -4058,17 +4973,38 @@ function parseCrmRowsFromXlsx(arrayBuffer) {
   const wb = XLSX.read(arrayBuffer, { type: "array" });
   const sheetName = wb.SheetNames[0];
   const ws = wb.Sheets[sheetName];
-  const json = XLSX.utils.sheet_to_json(ws, { defval: "" }); // array of objects keyed by headers
-  // Expect: email + country (or legacy category)
+
+  // Read as objects keyed by the header row
+  const json = XLSX.utils.sheet_to_json(ws, { defval: "" });
+
   const rows = [];
+
   json.forEach(obj => {
-    const email = normalizeEmail(obj.email ?? obj.Email ?? obj.E-mail ?? obj.mail);
-    const country = String(obj.country ?? obj.Country ?? obj.category ?? obj.Category ?? "").trim();
+    // Normalize header keys: trim + lower-case (handles EMAIL vs Email vs " E-MAIL ")
+    const o = {};
+    Object.keys(obj || {}).forEach(k => {
+      const key = String(k || "").trim().toLowerCase();
+      o[key] = obj[k];
+    });
+
+    const email = normalizeEmail(
+      o["email"] ?? o["e-mail"] ?? o["e_mail"] ?? o["mail"] ?? o["e-post"] ?? o["epost"]
+    );
+
+    const category = String(
+      o["categori"] ?? o["kategori"] ?? o["category"] ?? o["kategori "] ?? ""
+    ).trim().toLowerCase();
+
     if (!email) return;
-    rows.push({ email, country });
+    if (category !== "contract" && category !== "architect") return;
+
+    // NOTE: Stored as "country" in CRM DB for backwards-compat with existing fields/UI.
+    rows.push({ email, country: category, shopify: "", mailSent: "" });
   });
+
   return rows;
 }
+
 
 function dedupeByEmail(list) {
   const seen = new Set();
@@ -4082,157 +5018,11 @@ function dedupeByEmail(list) {
   return out;
 }
 
-function renderCRM() {
-  const container = document.createElement("div");
-  container.setAttribute("data-owned", "app");
-  container.appendChild(renderHeaderRow("CRM", []));
 
-  const wrap = document.createElement("div");
-  wrap.style.padding = "0 24px 24px";
 
-  const note = document.createElement("div");
-  note.style.opacity = ".75";
-  note.style.margin = "12px 0";
-  note.innerHTML = `
-    <div><b>Upload Excel</b> med kolumnerna: <code>email</code>, <code>country</code> (legacy <code>category</code> accepteras och mappas till country).</div>
-    <div style="margin-top:6px;">Unika emails (som inte redan finns i databasen) sparas i databasen och visas nedan.</div>
-    ${window.XLSX ? "" : `<div style="margin-top:10px;padding:10px;border:1px solid #f3c; border-radius:10px;">
-      XLSX-bibliotek saknas. Lägg till: <code>&lt;script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"&gt;&lt;/script&gt;</code>
-    </div>`}
-  `;
+// (Removed duplicate renderCRM implementation)
 
-  const card = document.createElement("div");
-  card.className = "card";
-  card.style.marginTop = "12px";
 
-  const cardBody = document.createElement("div");
-  cardBody.className = "card-body";
-
-  const row = document.createElement("div");
-  row.style.display = "flex";
-  row.style.gap = "12px";
-  row.style.alignItems = "center";
-  row.style.flexWrap = "wrap";
-
-  const file = document.createElement("input");
-  file.type = "file";
-  file.accept = ".xlsx,.xls";
-  file.className = "input";
-
-  const uploadBtn = document.createElement("button");
-  uploadBtn.className = "btn btn-primary";
-  uploadBtn.textContent = "Upload";
-
-  const status = document.createElement("div");
-  status.style.opacity = ".8";
-  status.style.fontSize = "13px";
-
-  uploadBtn.onclick = async () => {
-    if (!file.files || !file.files[0]) {
-      status.textContent = "Välj en Excel-fil först.";
-      return;
-    }
-    if (!window.XLSX) {
-      status.textContent = "XLSX-bibliotek saknas (script-tag).";
-      return;
-    }
-
-    status.textContent = "Läser fil...";
-    try {
-      const buf = await file.files[0].arrayBuffer();
-      const incoming = dedupeByEmail(parseCrmRowsFromXlsx(buf));
-
-      const db = loadCrmDb();
-      const existingEmails = new Set(db.map(x => normalizeEmail(x.email)));
-
-      const unique = incoming.filter(r => !existingEmails.has(normalizeEmail(r.email)));
-      // Save unique to DB (company empty by default; country from file if provided)
-      const toAdd = unique.map(r => ({ email: normalizeEmail(r.email), company: "", country: String(r.country || "").trim() }));
-      saveCrmDb(db.concat(toAdd));
-      saveCrmLastUnique(unique);
-
-      status.textContent = `Klart. ${unique.length} unika sparade.`;
-      render(); // refresh list
-    } catch (e) {
-      status.textContent = "Fel vid import. Kontrollera att filen har rätt headers.";
-      console.error(e);
-    }
-  };
-
-  row.append(file, uploadBtn, status);
-  cardBody.appendChild(row);
-  card.appendChild(cardBody);
-
-  // Unique list
-  const unique = loadCrmLastUnique();
-  const listCard = document.createElement("div");
-  listCard.className = "card";
-  listCard.style.marginTop = "12px";
-
-  const listBody = document.createElement("div");
-  listBody.className = "card-body";
-
-  const title = document.createElement("div");
-  title.style.display = "flex";
-  title.style.justifyContent = "space-between";
-  title.style.alignItems = "center";
-  title.innerHTML = `<div style="font-weight:700;">Unika emails (senaste upload)</div>
-    <div style="opacity:.7;font-size:12px;">${unique.length} st</div>`;
-
-  listBody.appendChild(title);
-
-  const table = document.createElement("table");
-  table.className = "table";
-  table.style.marginTop = "10px";
-  table.innerHTML = `
-    <thead><tr>
-      <th>Email</th>
-      <th style="width:180px;">Country</th>
-      <th style="width:140px;"></th>
-    </tr></thead>
-    <tbody></tbody>
-  `;
-  const tbody = table.querySelector("tbody");
-
-  unique.forEach((r, i) => {
-    const tr = document.createElement("tr");
-
-    const tdEmail = document.createElement("td");
-    tdEmail.textContent = r.email;
-
-    const tdCountry = document.createElement("td");
-    tdCountry.textContent = r.country || "";
-
-    const tdBtn = document.createElement("td");
-    const btn = document.createElement("button");
-    btn.className = "btn btn-secondary";
-    btn.textContent = "Formulär";
-    btn.onclick = () => openCrmFormModal({ email: r.email, country: r.country || "" });
-    tdBtn.appendChild(btn);
-
-    tr.append(tdEmail, tdCountry, tdBtn);
-    tbody.appendChild(tr);
-  });
-
-  if (unique.length === 0) {
-    const empty = document.createElement("div");
-    empty.style.opacity = ".7";
-    empty.style.marginTop = "10px";
-    empty.textContent = "Inga unika emails ännu. Ladda upp en fil för att se listan här.";
-    listBody.appendChild(empty);
-  } else {
-    listBody.appendChild(table);
-  }
-
-  listCard.appendChild(listBody);
-
-  wrap.append(note, card, listCard);
-  container.appendChild(wrap);
-
-  const contentArea = document.getElementById("contentArea");
-  contentArea.innerHTML = "";
-  contentArea.appendChild(container);
-}
 
 function openCrmFormModal({ email, country }) {
   const emailVal = normalizeEmail(email);
