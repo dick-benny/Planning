@@ -1918,6 +1918,7 @@ function renderFormDesignModal() {
   const firstName = mkInput("text", false, "");
   const lastName = mkInput("text", false, "");
   const company = mkInput("text", false, "");
+  const country = mkInput("text", false, "");
 
   const message = document.createElement("textarea");
   message.rows = 5;
@@ -1934,6 +1935,7 @@ function renderFormDesignModal() {
     mkField("First name", firstName),
     mkField("Last name", lastName),
     mkField("Company", company, true),
+    mkField("Country", country, true),
     mkField("Message", message, true)
   );
 
