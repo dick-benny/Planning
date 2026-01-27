@@ -19,19 +19,18 @@
  *   - Expandable only if content exists
  *   - Action: To Forwarder (marks row visible to forwarder) + Done (enabled only if all tracking filled)
  *   - Expanded content columns: checkbox, PO, Delivery, External, Qty, Date, Shipping Address, Incoterms, Tracking
- * - Print:
- *   - Print in Purchase Orders prints selected POs (opens print window; user can Save as PDF)
- *   - Print in Dispatch prints selected Dispatch POs
  */
 
 'use strict';
 
 const USERS = [
   { name: "Abbas", role: "manufacturer" },
-  { name: "David", role: "admin" },
-  { name: "Dick", role: "admin" },
   { name: "Mohit", role: "forwarder" },
-  { name: "Jacob", role: "user" }
+
+  // Roles per request
+  { name: "Dick", role: "admin" },
+  { name: "David", role: "buyer" },   // inköpare
+  { name: "Jacob", role: "sales" }   // säljare
 ];
 
 const CATEGORY_VALUES = ["Rug", "Colonnade", "Tapestry", "Covers"];
@@ -196,7 +195,6 @@ const state = {
   session: { user: null }
 };
 
-// Backwards-compatible accessors (existing code can keep using state.purchaseOrders etc.)
 function defineStateAlias(key, getFn, setFn) {
   Object.defineProperty(state, key, {
     configurable: true,
@@ -300,7 +298,7 @@ function addMonths(date, months) {
   return d;
 }
 
-function isAdmin() { return state.session.user?.role === "admin"; }
+function isAdmin() { return ["admin","buyer"].includes(state.session.user?.role); }
 function isManufacturer() { return state.session.user?.role === "manufacturer"; }
 function isForwarder() { return state.session.user?.role === "forwarder"; }
 function canSeeNewPoNewRow() { return isAdmin(); }
@@ -549,74 +547,97 @@ function ensureTabs() {
   const tabs = document.querySelector(".tabs");
   if (!tabs) return;
 
-  const isAdminUser = state.session.user?.role === "admin";
+  const role = state.session.user?.role || "";
+  const isAdminUser = role === "admin";
+  const isBuyerUser = role === "buyer";
+  const isSalesUser = role === "sales";
+
+  // Role-based allowed tabs (top tabs)
+  const ALLOWED = {
+    admin: null, // all
+    buyer: new Set(["purchaseorders", "dispatch", "analytical-po"]),
+    sales: new Set(["crm", "crm-coop"])
+  };
+
+  // Ensure Analytical PO tab exists for admin + buyer
   const analyticalSel = '.tab[data-tab="analytical-po"]';
   const existingAnalytical = tabs.querySelector(analyticalSel);
-
-  // Add/remove Analytical PO tab based on role
-  if (isAdminUser && !existingAnalytical) {
+  if ((isAdminUser || isBuyerUser) && !existingAnalytical) {
     const btn = document.createElement("button");
     btn.type = "button";
     btn.className = "tab";
     btn.dataset.tab = "analytical-po";
     btn.textContent = "Analytical PO";
-  const inventoryBtn = tabs.querySelector('.tab[data-tab="inventory"]');
-  const crmBtn = tabs.querySelector('.tab[data-tab="crm"]');
-  const crmCoopBtn = tabs.querySelector('.tab[data-tab="crm-coop"]');
 
-  // Place Analytical PO directly AFTER Inventory.
-  if (inventoryBtn && inventoryBtn.nextSibling) {
-    tabs.insertBefore(btn, inventoryBtn.nextSibling);
-  } else if (inventoryBtn) {
-    tabs.appendChild(btn);
-  } else if (crmBtn) {
-    tabs.insertBefore(btn, crmBtn); // fallback
-  } else if (crmCoopBtn) {
-    tabs.insertBefore(btn, crmCoopBtn); // fallback
-  } else {
-    tabs.appendChild(btn);
+    // Place Analytical PO after Inventory if possible, else append.
+    const inventoryBtn = tabs.querySelector('.tab[data-tab="inventory"]');
+    const dispatchBtn = tabs.querySelector('.tab[data-tab="dispatch"]');
+    if (inventoryBtn && inventoryBtn.nextSibling) tabs.insertBefore(btn, inventoryBtn.nextSibling);
+    else if (dispatchBtn && dispatchBtn.nextSibling) tabs.insertBefore(btn, dispatchBtn.nextSibling);
+    else tabs.appendChild(btn);
   }
-}
-
-  if (!isAdminUser && existingAnalytical) {
-    if (state.activeTab === "analytical-po") state.activeTab = "purchaseorders";
+  if (!(isAdminUser || isBuyerUser) && existingAnalytical) {
+    if (state.activeTab === "analytical-po") state.activeTab = isSalesUser ? "crm" : "purchaseorders";
     existingAnalytical.remove();
   }
-  // CRM tab (always available) — ALWAYS LAST.
+
+  // Ensure CRM tab exists for admin + sales (CRM Contracts)
   const crmSel = '.tab[data-tab="crm"]';
   const existingCrm = tabs.querySelector(crmSel);
-  if (!existingCrm) {
+  if ((isAdminUser || isSalesUser) && !existingCrm) {
     const btn = document.createElement("button");
     btn.type = "button";
     btn.className = "tab";
     btn.dataset.tab = "crm";
-    btn.textContent = "CRM";
+    btn.textContent = "CRM Contracts";
     tabs.appendChild(btn);
   }
-  
-  // Ensure Form design tab exists (should be last)
-const formSel = '.tab[data-tab="form-design"]';
-const existingForm = tabs.querySelector(formSel);
-if (!existingForm) {
-  const btn = document.createElement("button");
-  btn.type = "button";
-  btn.className = "tab";
-  btn.dataset.tab = "form-design";
-  btn.textContent = "Form design";
-  tabs.appendChild(btn);
-}
+  // If CRM tab exists (from HTML), ensure label is correct
+  const crmNow = tabs.querySelector(crmSel);
+  if (crmNow) crmNow.textContent = "CRM Contracts";
 
-// Keep CRM tabs at the end (CRM -> CRM Coop -> Form design)
-function moveCrmTabsToEnd() {
-  const crm = tabs.querySelector('.tab[data-tab="crm"]');
-  const coop = tabs.querySelector('.tab[data-tab="crm-coop"]');
-  const form = tabs.querySelector('.tab[data-tab="form-design"]');
-  if (crm) tabs.appendChild(crm);
-  if (coop) tabs.appendChild(coop);
-  if (form) tabs.appendChild(form);
-}
+  // Ensure Form design exists ONLY for admin
+  const formSel = '.tab[data-tab="form-design"]';
+  const existingForm = tabs.querySelector(formSel);
+  if (isAdminUser && !existingForm) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "tab";
+    btn.dataset.tab = "form-design";
+    btn.textContent = "Form design";
+    tabs.appendChild(btn);
+  }
+  if (!isAdminUser && existingForm) {
+    if (state.activeTab === "form-design") state.activeTab = isSalesUser ? "crm" : "purchaseorders";
+    existingForm.remove();
+  }
 
+  // Keep CRM tabs at the end (CRM Contracts -> CRM Coop -> Form design)
+  function moveCrmTabsToEnd() {
+    const crm = tabs.querySelector('.tab[data-tab="crm"]');
+    const coop = tabs.querySelector('.tab[data-tab="crm-coop"]');
+    const form = tabs.querySelector('.tab[data-tab="form-design"]');
+    if (crm) tabs.appendChild(crm);
+    if (coop) tabs.appendChild(coop);
+    if (form) tabs.appendChild(form);
+  }
   moveCrmTabsToEnd();
+
+  // Apply role-based visibility
+  const allowedSet = isAdminUser ? null : (isBuyerUser ? ALLOWED.buyer : (isSalesUser ? ALLOWED.sales : null));
+
+  const allTabBtns = Array.from(tabs.querySelectorAll(".tab"));
+  allTabBtns.forEach(btn => {
+    const tabId = btn.dataset.tab;
+    const ok = (!allowedSet) ? true : allowedSet.has(tabId);
+    btn.style.display = ok ? "" : "none";
+  });
+
+  // If current active tab isn't allowed, jump to first allowed visible tab
+  if (allowedSet && !allowedSet.has(state.activeTab)) {
+    const firstVisible = allTabBtns.find(b => b.style.display !== "none");
+    if (firstVisible) state.activeTab = firstVisible.dataset.tab;
+  }
 
   // Bind click handlers
   tabs.querySelectorAll(".tab").forEach(btn => {
@@ -633,34 +654,36 @@ function moveCrmTabsToEnd() {
         state.poView = "list";
         state.expandedPoId = null;
       }
+
       // Entering Analytical PO should start with empty temporary order
-if (state.activeTab === "analytical-po") {
-  if (!state.analytical) state.analytical = {};
-  state.analytical.tempOrder = {};
-  state.analytical.view = "list";
+      if (state.activeTab === "analytical-po") {
+        if (!state.analytical) state.analytical = {};
+        state.analytical.tempOrder = {};
+        state.analytical.view = "list";
+        // Reset amounts so temporary order is truly empty
+        if (state.analytical.bySku) {
+          Object.values(state.analytical.bySku).forEach(rec => { rec.amount = 0; });
+        }
+      }
 
-  // Reset amounts so temporary order is truly empty
-  if (state.analytical.bySku) {
-    Object.values(state.analytical.bySku).forEach(rec => { rec.amount = 0; });
-  }
-}
+      // Entering Form design should open empty (no default form)
+      if (state.activeTab === "form-design") {
+        if (!state.ui) state.ui = {};
+        if (!state.ui.formDesign) state.ui.formDesign = {};
+        state.ui.formDesign.selectedForm = "";
+        // Close any open modal so the tab starts blank
+        state.modal = { kind: null, data: null };
+      }
 
-      state.expandedPoId = null;
-      state.expandedDispatchId = null;
-      state.expandedDispatchPoKey = null;
-      closeMenus();
       render();
     });
   });
 
-  // Highlight current tab
-  const current = Array.from(tabs.querySelectorAll(".tab")).find(b => ((b.dataset.tab === "archieve") ? "archive" : b.dataset.tab) === state.activeTab);
-  if (current) {
-    tabs.querySelectorAll(".tab").forEach(b => b.classList.remove("is-active"));
-    current.classList.add("is-active");
-  }
+  // Mark active tab button
+  tabs.querySelectorAll(".tab").forEach(b => b.classList.remove("is-active"));
+  const activeBtn = tabs.querySelector(`.tab[data-tab="${state.activeTab}"]`);
+  if (activeBtn) activeBtn.classList.add("is-active");
 }
-
 
 function updateTopbarUserAndLogout() {
   const topActions = document.querySelector(".top-actions");
@@ -905,7 +928,7 @@ function renderMain() {
     }
     case "analytical-po": {
       // Safety: only admin
-      if (state.session.user?.role !== "admin") {
+      if (!["admin","buyer"].includes(state.session.user?.role)) {
         state.activeTab = "purchaseorders";
         render();
         return;
@@ -966,7 +989,6 @@ function renderHeaderRow(title, extras = []) {
   const actions = document.createElement("div");
   actions.className = "hero-actions";
 
-  // Archive / Back button (single source of truth).
   // (A previous refactor accidentally referenced an undefined variable `archiveBtn` here,
   // which would throw a ReferenceError and make the whole UI appear "frozen".)
   const archiveBtn = document.createElement("button");
@@ -1024,8 +1046,7 @@ function renderHeaderRow(title, extras = []) {
       return;
     }
 
-    // Fallback: behave like Back.
-    archiveBtn.textContent = "Back";
+    archiveBtn.textContent = "Archive";
     archiveBtn.onclick = () => {
       state.activeTab = "purchaseorders";
       state.poView = "list";
@@ -1036,7 +1057,6 @@ function renderHeaderRow(title, extras = []) {
 
   labelAndHandler();
 
-  // Print BEFORE Archive
   const printBtn = document.createElement("button");
   printBtn.className = "btn btn-secondary";
   printBtn.type = "button";
@@ -1292,7 +1312,6 @@ function renderCrmCoop() {
 
   const extras = [];
 
-  // Upload button (same level as Print in Purchase Orders)
   const uploadBtn = document.createElement("button");
   uploadBtn.className = "btn btn-secondary";
   uploadBtn.type = "button";
@@ -1740,7 +1759,6 @@ function renderCrmCoopMessageViewModal() {
   const back = document.createElement("button");
   back.className = "btn btn-secondary";
   back.type = "button";
-  back.textContent = "Back";
   back.onclick = () => openModal("crm-coop-messages", { email });
 
   const close = document.createElement("button");
@@ -1813,40 +1831,63 @@ function renderFormDesign() {
 
   if (!state.ui) state.ui = {};
   if (!state.ui.formDesign) state.ui.formDesign = {};
-  if (!state.ui.formDesign.lastEmail) state.ui.formDesign.lastEmail = randomEmail();
+  if (typeof state.ui.formDesign.selectedForm !== "string") state.ui.formDesign.selectedForm = "";
 
-  // Auto-open once per visit to the tab
-  if (!state.ui.formDesign.openedOnce) {
-    state.ui.formDesign.openedOnce = true;
-    openModal("form-design", { email: state.ui.formDesign.lastEmail });
-  }
+  // "Open form" dropdown (no default selection)
+  const openSel = document.createElement("select");
+  openSel.className = "input";
+  openSel.style.minWidth = "220px";
 
-  const openBtn = document.createElement("button");
-  openBtn.className = "btn btn-secondary";
-  openBtn.type = "button";
-  openBtn.textContent = "Open form";
-  openBtn.addEventListener("click", () => {
-    state.ui.formDesign.lastEmail = randomEmail();
-    openModal("form-design", { email: state.ui.formDesign.lastEmail });
+  const opt0 = document.createElement("option");
+  opt0.value = "";
+  opt0.textContent = "Open form…";
+  opt0.disabled = true;
+  opt0.selected = true;
+  openSel.appendChild(opt0);
+
+  const optApply = document.createElement("option");
+  optApply.value = "apply";
+  optApply.textContent = "Apply";
+  openSel.appendChild(optApply);
+
+  const optPrice = document.createElement("option");
+  optPrice.value = "price";
+  optPrice.textContent = "Price";
+  openSel.appendChild(optPrice);
+
+  openSel.addEventListener("change", () => {
+    const v = String(openSel.value || "");
+    if (!v) return;
+
+    state.ui.formDesign.selectedForm = v;
+    openModal("form-design", { form: v });
+
+    // Reset dropdown so the tab stays "empty" by default
+    openSel.value = "";
     render();
   });
-  extras.push(openBtn);
+
+  extras.push(openSel);
 
   const header = renderHeaderRow("Form design", extras);
   container.appendChild(header);
 
+  // Blank state: Form design is standalone and shows nothing until a form is opened.
   const hint = document.createElement("div");
-  hint.style.margin = "16px 24px";
-  hint.style.color = "rgba(0,0,0,0.65)";
-  hint.textContent = "Preview the external customer application form.";
+  hint.style.padding = "14px 16px";
+  hint.style.color = "rgba(0,0,0,0.6)";
+  hint.textContent = "Choose a form from “Open form…” to preview/design it.";
   container.appendChild(hint);
 
   return container;
 }
 
+
+
+
 function renderFormDesignModal() {
   const data = (state.modal && state.modal.data) ? state.modal.data : {};
-  const emailValue = String(data.email || randomEmail());
+  const formType = String(data.form || "apply").toLowerCase();
 
   const box = document.createElement("div");
   box.className = "modal-box";
@@ -1866,7 +1907,7 @@ function renderFormDesignModal() {
   const title = document.createElement("div");
   title.style.fontSize = "18px";
   title.style.fontWeight = "700";
-  title.textContent = "Apply for an account";
+  title.textContent = (formType === "price") ? "Request a price" : "Apply for an account";
 
   const closeBtn = document.createElement("button");
   closeBtn.className = "btn btn-secondary";
@@ -1914,50 +1955,83 @@ function renderFormDesignModal() {
     return wrap;
   };
 
-  const email = mkInput("email", true, emailValue);
-  const firstName = mkInput("text", false, "");
-  const lastName = mkInput("text", false, "");
+  const email = mkInput("email", false, "");
   const company = mkInput("text", false, "");
-  const country = mkInput("text", false, "");
 
   const message = document.createElement("textarea");
-  message.rows = 5;
-  message.style.resize = "vertical";
+  message.value = "";
+  message.rows = 4;
   message.style.width = "100%";
+  message.style.resize = "vertical";
   message.style.padding = "12px 12px";
   message.style.borderRadius = "12px";
   message.style.border = "1px solid rgba(0,0,0,0.14)";
   message.style.outline = "none";
   message.style.fontSize = "14px";
 
-  grid.append(
-    mkField("Email", email, true),
-    mkField("First name", firstName),
-    mkField("Last name", lastName),
-    mkField("Company", company, true),
-    mkField("Country", country, true),
-    mkField("Message", message, true)
-  );
+  if (formType === "price") {
+    const product = mkInput("text", false, "");
+    const qty = mkInput("number", false, "1");
+
+    grid.append(
+      mkField("Email", email, true),
+      mkField("Company", company, true),
+      mkField("Product", product, true),
+      mkField("Quantity", qty, false),
+      mkField("Message", message, true)
+    );
+  } else {
+    const firstName = mkInput("text", false, "");
+    const lastName = mkInput("text", false, "");
+
+    const country = document.createElement("select");
+    country.style.width = "100%";
+    country.style.padding = "12px 12px";
+    country.style.borderRadius = "12px";
+    country.style.border = "1px solid rgba(0,0,0,0.14)";
+    country.style.outline = "none";
+    country.style.fontSize = "14px";
+
+    const countries = ["Sweden", "Norway", "Denmark", "Finland", "Other"];
+    countries.forEach(c => {
+      const o = document.createElement("option");
+      o.value = c;
+      o.textContent = c;
+      country.appendChild(o);
+    });
+
+    grid.append(
+      mkField("Email", email, true),
+      mkField("First name", firstName),
+      mkField("Last name", lastName),
+      mkField("Company", company, false),
+      mkField("Country", country, false),
+      mkField("Message", message, true)
+    );
+  }
 
   const footer = document.createElement("div");
   footer.style.marginTop = "16px";
   footer.style.display = "flex";
   footer.style.justifyContent = "flex-end";
 
-  const applyBtn = document.createElement("button");
-  applyBtn.className = "btn btn-primary";
-  applyBtn.type = "button";
-  applyBtn.textContent = "Apply for an account";
-  applyBtn.addEventListener("click", () => {
+  const primaryBtn = document.createElement("button");
+  primaryBtn.className = "btn btn-primary";
+  primaryBtn.type = "button";
+  primaryBtn.textContent = (formType === "price") ? "Request price" : "Apply";
+  primaryBtn.addEventListener("click", () => {
     alert("to be added.");
   });
 
-  footer.appendChild(applyBtn);
+  footer.appendChild(primaryBtn);
 
   body.append(grid, footer);
   box.append(header, body);
   return box;
 }
+
+
+
 function renderCRM() {
   const container = document.createElement("div");
   container.setAttribute("data-owned", "app");
@@ -1970,7 +2044,6 @@ function renderCRM() {
 
   const extras = [];
 
-  // Upload button (placed in header where Back used to be)
   const uploadBtn = document.createElement("button");
   uploadBtn.className = "btn btn-secondary";
   uploadBtn.type = "button";
@@ -2032,7 +2105,6 @@ function renderCRM() {
   extras.push(uploadBtn);
 
   const header = renderHeaderRow("CRM", extras);
-  // Remove Back button explicitly for CRM tab (if header injects it)
   Array.from(header.querySelectorAll("button")).forEach(btn => {
     if (btn.textContent && btn.textContent.trim().toLowerCase() === "back") btn.remove();
   });
@@ -2086,7 +2158,7 @@ function renderAnalyticalPO() {
   container.setAttribute("data-owned", "app");
 
   // Safety: only admin
-  if (state.session.user?.role !== "admin") {
+  if (!["admin","buyer"].includes(state.session.user?.role)) {
     const box = document.createElement("div");
     box.style.padding = "24px";
     box.textContent = "Not authorized.";
@@ -2169,21 +2241,24 @@ function createPOFromAnalytical() {
 const isLocal = mode === "prod_to_local";
 const isTransfer = (mode === "transfer_aircargo" || mode === "transfer_boat");
 
-// For transfer_aircargo / transfer_boat: Amount must be <= Lager 1 for every row
+// For transfer_aircargo / transfer_boat: Amount must be <= InProduction + Bhadohi(stock1) for every row
 if (isTransfer) {
   const bad = picked.find(x => {
     const rec = (state.analytical.bySku && state.analytical.bySku[x.sku]) ? state.analytical.bySku[x.sku] : null;
-    const max = rec ? (Number(rec.stock1) || 0) : 0;
+    const inProd = inProductionForSku(x.sku) ?? 0;
+    const bhadohi = rec ? (Number(rec.stock1) || 0) : 0;
+    const max = (Number(inProd) || 0) + bhadohi;
     return (Number(x.amount) || 0) > max;
   });
   if (bad) {
     const rec = state.analytical.bySku[bad.sku];
-    const max = rec ? (Number(rec.stock1) || 0) : 0;
-    alert(`Amount för ${bad.sku} måste vara <= Lager 1 (${max}).`);
+    const inProd = inProductionForSku(bad.sku) ?? 0;
+    const bhadohi = rec ? (Number(rec.stock1) || 0) : 0;
+    const max = (Number(inProd) || 0) + bhadohi;
+    alert(`Amount för ${bad.sku} måste vara <= InProduction + Bhadohi (${max}).`);
     return;
   }
 }
-
 // For transfer POs: set ERD to yesterday so Done is clickable in Purchase Orders
 let erdForNewPo = "";
 if (isTransfer) {
@@ -2302,6 +2377,16 @@ const hasTempLines = Object.keys(temp).some(
 );
 
 createBtn.disabled = !hasTempLines;
+
+function updateCreateBtnState() {
+  const tempNow = state.analytical.tempOrder || {};
+  const has = Object.keys(tempNow).some(sku => Number(tempNow[sku]) > 0);
+  createBtn.disabled = !has;
+  const isSelected = String(state.analytical.filter || "") === "selected";
+  if (isSelected && has) createBtn.classList.add("btn-ready");
+  else createBtn.classList.remove("btn-ready");
+  createBtn.title = has ? "Create PO from Temporary order" : "Sätt Amount > 0 på minst en variant först";
+}
 
 // Visual rule:
 // - Button should be GREEN only when filter === "selected" AND there are selected lines (Amount > 0)
@@ -2490,7 +2575,9 @@ if (filterVal === "selected") {
 
     // highlight row if Amount > 0
     const isDone = Number(rec.amount) > 0;
-    if (isDone) tr // light green tint
+    if (isDone) {
+      tr.style.backgroundColor = "rgba(0, 200, 0, 0.10)";
+    }
 
     // Variant
     const tdVar = document.createElement("td");
@@ -2552,50 +2639,81 @@ dot.style.boxShadow = "0 0 0 3px rgba(0,0,0,0.04)";
     dot.style.background = statusColor(rec.sales3, rec.stock1, rec.stock2);
     tdStatus.appendChild(dot);
 
-    // Amount input
+    // Amount input (manual antal, digits-only)
     const tdAmt = document.createElement("td");
     tdAmt.style.backgroundColor = "transparent";
-        tdAmt.style.textAlign = "center";
-tdAmt.style.padding = "10px";
+    tdAmt.style.textAlign = "center";
+    tdAmt.style.padding = "10px";
+
     const amt = document.createElement("input");
-    amt.type = "number";
-    amt.min = "0";
-    amt.step = "1";
+    // Use text + inputmode to enforce digits-only reliably (no e/+/-.)
+    amt.type = "text";
+    amt.inputMode = "numeric";
+    amt.autocomplete = "off";
+    amt.spellcheck = false;
     amt.className = "input";
     amt.value = String(rec.amount ?? 0);
 
-amt.style.textAlign = "center";
-amt.style.width = "90px";
+    amt.style.textAlign = "center";
+    amt.style.width = "90px";
 
-amt.addEventListener("input", () => {
-  let v = Number(amt.value) || 0;
-  const mode = String(state.analytical.mode || "prod_to_local");
-  const isTransfer = (mode === "transfer_aircargo" || mode === "transfer_boat");
-  if (isTransfer) {
-    const max = Number(rec.stock1) || 0;
-    if (v > max) {
-      v = max;
-      amt.value = String(max);
+    function updateAmountValidation() {
+      const mode = String(state.analytical.mode || "prod_to_local");
+      const isTransfer = (mode === "transfer_aircargo" || mode === "transfer_boat");
+
+      if (!isTransfer) {
+        amt.style.borderColor = "";
+        amt.style.color = "";
+        return;
+      }
+
+      const inProd = Number(inProductionForSku(p.sku) ?? 0) || 0;
+      const bhadohi = Number(rec.stock1 ?? 0) || 0;
+      const max = inProd + bhadohi;
+
+      if ((Number(rec.amount) || 0) > max) {
+        amt.style.borderColor = "red";
+        amt.style.color = "red";
+      } else {
+        amt.style.borderColor = "";
+        amt.style.color = "";
+      }
     }
-  }
-  rec.amount = v;
 
-  // Keep temporary order in sync (unique per SKU)
-  if (!state.analytical.tempOrder) state.analytical.tempOrder = {};
-  if (rec.amount > 0) state.analytical.tempOrder[p.sku] = rec.amount;
-  else delete state.analytical.tempOrder[p.sku];
+    // Initial validation
+    updateAmountValidation();
 
-  // update row highlight live
-if (Number(rec.amount) > 0) tr.classList.add("ap-done");
-else tr.classList.remove("ap-done");
+    amt.addEventListener("input", () => {
+      // Keep only digits
+      const cleaned = String(amt.value || "").replace(/[^0-9]/g, "");
+      if (cleaned !== amt.value) amt.value = cleaned;
 
+      const v = cleaned === "" ? 0 : Number(cleaned);
 
-  // Re-render so Create PO button + derived columns update immediately
-  render();
-});
+      rec.amount = Number.isFinite(v) ? v : 0;
+
+      // Keep temporary order in sync (unique per SKU)
+      if (!state.analytical.tempOrder) state.analytical.tempOrder = {};
+      if (rec.amount > 0) state.analytical.tempOrder[p.sku] = rec.amount;
+      else delete state.analytical.tempOrder[p.sku];
+
+      // Row highlight rule: any row with Amount > 0 becomes green
+      if (Number(rec.amount) > 0) tr.style.backgroundColor = "rgba(0, 200, 0, 0.10)";
+      else tr.style.backgroundColor = "";
+
+      // Transfer rule: mark amount red if Amount > InProduction + Bhadohi
+      updateAmountValidation();
+
+      // Update Create PO button state without re-render (keeps caret so multi-digit input works)
+      updateCreateBtnState();
+    });
+
+    // Re-render when leaving the field so "selected" filter view can update cleanly
+    amt.addEventListener("blur", () => {
+      render();
+    });
 
     tdAmt.appendChild(amt);
-
     // Action: analyze
     const tdAction = document.createElement("td");
     tdAction.style.backgroundColor = "transparent";
@@ -3156,7 +3274,6 @@ function renderDispatch() {
   const extras = [];
 
   // NOTE: No separate Archive button here.
-  // Use the single header "Archive" button (it becomes "Back" while in dispatch archive).
   const newDispatchBtn = document.createElement("button");
   newDispatchBtn.className = "btn btn-primary";
   newDispatchBtn.type = "button";
@@ -3446,12 +3563,10 @@ function renderArchive(source) {
   h.textContent = "Archive";
   title.appendChild(h);
 
-  // Back button for contextual archives (PO / Analytical)
   if (source === "purchaseorders" || source === "analytical") {
     const back = document.createElement("button");
     back.type = "button";
     back.className = "btn btn-secondary";
-    back.textContent = "Back";
     back.addEventListener("click", () => {
       if (source === "purchaseorders") {
         state.poView = "list";
@@ -3951,7 +4066,6 @@ function renderModal() {
 
   if (!state.modal || !state.modal.open) return;
 
-  // Backdrop covers viewport and centers the modal box
   const backdrop = document.createElement("div");
   backdrop.className = "modal-backdrop is-open";
   backdrop.style.position = "fixed";
@@ -4739,51 +4853,68 @@ function renderNewDispatchModal() {
 }
 
 /* =========================
-   Printing (opens print window)
 ========================= */
 function printSelectedForCurrentTab() {
-  if (state.activeTab === "purchaseorders") {
-    const selected = state.purchaseOrders.filter(po => state.selectedPoIds.has(po.id));
-    if (selected.length === 0) {
-      alert("Välj minst en PO att skriva ut.");
+  // Print helper for Purchase Orders and Dispatch.
+  // (This was previously corrupted during UI button cleanup; kept minimal and safe.)
+  try {
+    let title = "";
+    let items = [];
+
+    if (state.activeTab === "purchaseorders") {
+      const selected = state.purchaseOrders.filter(po => state.selectedPoIds.has(po.id));
+      if (selected.length === 0) {
+        alert("Välj minst en PO att skriva ut.");
+        return;
+      }
+      title = "Purchase Orders";
+      items = selected;
+    } else if (state.activeTab === "dispatch") {
+      const selected = [];
+      for (const row of state.dispatchRows) {
+        (row.pos || []).filter(poMatchesActiveManufacturer).forEach((p, idx) => {
+          const key = `${row.id}|${idx}`;
+          if (state.selectedDispatchPoKeys.has(key)) selected.push({ dispatchDate: row.date, ...p });
+        });
+      }
+      if (selected.length === 0) {
+        alert("Välj minst en PO i Dispatch att skriva ut.");
+        return;
+      }
+      title = "Dispatch";
+      items = selected;
+    } else {
+      alert("Print finns bara i Purchase Orders och Dispatch.");
       return;
     }
-    openPrintWindow(renderPrintHtmlForPOs(selected, "Purchase Orders"));
-    return;
-  }
 
-  if (state.activeTab === "dispatch") {
-    const selected = [];
-    for (const row of state.dispatchRows) {
-      (row.pos || []).filter(poMatchesActiveManufacturer).forEach((p, idx) => {
-        const key = `${row.id}|${idx}`;
-        if (state.selectedDispatchPoKeys.has(key)) selected.push({ dispatchDate: row.date, ...p });
-      });
-    }
-    if (selected.length === 0) {
-      alert("Välj minst en PO i Dispatch att skriva ut.");
+    const html = `<!doctype html><html><head><meta charset="utf-8" />
+      <title>${escapeHtml(title)}</title>
+      <style>
+        body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;margin:24px;}
+        h1{margin:0 0 16px;}
+        pre{white-space:pre-wrap;word-break:break-word;background:#f7f7f7;border:1px solid #e6e6e6;border-radius:12px;padding:12px;}
+      </style>
+    </head><body>
+      <h1>${escapeHtml(title)}</h1>
+      <pre>${escapeHtml(JSON.stringify(items, null, 2))}</pre>
+    </body></html>`;
+
+    const w = window.open("", "_blank");
+    if (!w) {
+      alert("Popup blockerad – tillåt popup för att skriva ut.");
       return;
     }
-    openPrintWindow(renderPrintHtmlForDispatch(selected));
-    return;
+    w.document.open();
+    w.document.write(html);
+    w.document.close();
+    w.focus();
+    setTimeout(() => w.print(), 200);
+  } catch (e) {
+    console.error(e);
+    alert("Print failed: " + (e && e.message ? e.message : String(e)));
   }
-
-  alert("Print finns bara för Purchase Orders och Dispatch.");
 }
-
-function openPrintWindow(html) {
-  const w = window.open("", "_blank");
-  if (!w) {
-    alert("Popup blockerad – tillåt popup för att skriva ut.");
-    return;
-  }
-  w.document.open();
-  w.document.write(html);
-  w.document.close();
-  w.focus();
-  setTimeout(() => w.print(), 200);
-}
-
 
 function openPdfUrl(url) {
   if (!url) return;
@@ -4850,96 +4981,6 @@ function openCommercialInvoiceDummyPdf(poNumber) {
   const url = createCommercialInvoiceDummyPdfUrl(poNumber);
   openPdfUrl(url);
 }
-
-function renderPrintHtmlForPOs(pos, title) {
-  const rows = pos.map(po => `
-    <div class="card">
-      <h2>${escapeHtml(po.po)}</h2>
-      <div class="meta">
-        <div><b>Type:</b> ${escapeHtml(po.type)}</div>
-        <div><b>Delivery:</b> ${escapeHtml(po.delivery || "")}</div>
-        <div><b>External:</b> ${escapeHtml(po.external)}</div>
-        <div><b>Date:</b> ${escapeHtml(po.date || "")}</div>
-        <div><b>Incoterms:</b> ${escapeHtml(po.incoterms || "")}</div>
-      </div>
-      <div class="addr"><b>Shipping Address</b><br>${multilineToHtml(po.shippingAddress || "")}</div>
-      <h3>Variants</h3>
-      <table>
-        <thead><tr><th>Name</th><th>SKU</th><th>Category</th><th>Balance</th><th>Amount</th><th>ERD</th></tr></thead>
-        <tbody>
-          ${(po.variants||[]).map(v => `<tr>
-            <td>${escapeHtml(v.name||"")}</td>
-            <td>${escapeHtml(v.sku||"")}</td>
-            <td>${escapeHtml(v.category||"")}</td>
-            
-            <td>${escapeHtml(String(v.amount??""))}</td>
-            <td>${escapeHtml(v.erd||"")}</td>
-          </tr>`).join("")}
-        </tbody>
-      </table>
-    </div>
-  `).join("");
-
-  return `<!doctype html><html><head><meta charset="utf-8" />
-    <title>${escapeHtml(title)}</title>
-    <style>
-      body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;margin:24px;}
-      h1{margin:0 0 16px;}
-      .card{page-break-inside:avoid;border:1px solid #ddd;border-radius:12px;padding:14px;margin:0 0 14px;}
-      .meta{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin:8px 0 10px;}
-      .addr{margin:8px 0 10px;}
-      table{width:100%;border-collapse:collapse;}
-      th,td{border-top:1px solid #eee;padding:8px;text-align:left;font-size:12px;}
-      th{font-size:12px;color:#555;}
-    </style>
-  </head><body>
-    <h1>${escapeHtml(title)}</h1>
-    ${rows}
-  </body></html>`;
-}
-
-function renderPrintHtmlForDispatch(items) {
-  const rows = items.map(p => `
-    <tr>
-      <td>${escapeHtml(p.po||"")}</td>
-      <td>${escapeHtml(p.delivery||"")}</td>
-      <td>${escapeHtml(p.external||"")}</td>
-      <td>${escapeHtml(String(p.qty??""))}</td>
-      <td>${escapeHtml(p.date||"")}</td>
-      <td>${multilineToHtml(p.shippingAddress||"")}</td>
-      <td>${escapeHtml(p.incoterms||"")}</td>
-      <td>${escapeHtml(p.tracking||"")}</td>
-      <td>${escapeHtml(p.dispatchDate||"")}</td>
-    </tr>
-  `).join("");
-
-  return `<!doctype html><html><head><meta charset="utf-8" />
-    <title>Dispatch</title>
-    <style>
-      body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;margin:24px;}
-      table{width:100%;border-collapse:collapse;}
-      th,td{border-top:1px solid #eee;padding:8px;text-align:left;font-size:12px;vertical-align:top;}
-      th{font-size:12px;color:#555;}
-    </style>
-  </head><body>
-    <h1>Dispatch</h1>
-    <table>
-      <thead>
-        <tr>
-          <th>PO</th><th>Delivery</th><th>External</th><th>Qty</th><th>Date</th><th>Shipping</th><th>Incoterms</th><th>Tracking</th><th>Dispatch Date</th>
-        </tr>
-      </thead>
-      <tbody>${rows}</tbody>
-    </table>
-  </body></html>`;
-}
-
-
-/* =========================
-   CRM (Excel upload + unique list + form)
-========================= */
-const STORAGE_KEY_CRM_DB = "butler_crm_db_v1";
-const STORAGE_KEY_CRM_LAST_UNIQUE = "butler_crm_last_unique_v1";
 
 function loadCrmDb() {
   try {
@@ -5138,12 +5179,97 @@ function openCrmFormModal({ email, country }) {
 }
 
 
+
+function ensureBaseDom() {
+  // If main.html is missing the expected containers, create them so the app can still render.
+  // This avoids a blank page with no console errors when #contentArea doesn't exist.
+  let contentArea = document.getElementById("contentArea");
+  let modalRoot = document.getElementById("modalRoot");
+  let tabs = document.querySelector(".tabs");
+
+  if (contentArea && modalRoot && tabs) return;
+
+  // Create root wrapper
+  let root = document.getElementById("appRoot");
+  if (!root) {
+    root = document.createElement("div");
+    root.id = "appRoot";
+    document.body.appendChild(root);
+  }
+
+  // Topbar (tabs + actions)
+  let topbar = root.querySelector(".topbar");
+  if (!topbar) {
+    topbar = document.createElement("div");
+    topbar.className = "topbar";
+    topbar.setAttribute("data-owned", "app");
+    root.appendChild(topbar);
+  }
+
+  // Tabs container
+  tabs = topbar.querySelector(".tabs");
+  if (!tabs) {
+    tabs = document.createElement("div");
+    tabs.className = "tabs";
+    topbar.appendChild(tabs);
+  }
+
+  // Actions container
+  let actions = topbar.querySelector(".top-actions");
+  if (!actions) {
+    actions = document.createElement("div");
+    actions.className = "top-actions";
+    topbar.appendChild(actions);
+  }
+
+  // Ensure action elements exist (used by updateTopbarUserAndLogout)
+  if (!document.getElementById("settingsBtn")) {
+    const settingsBtn = document.createElement("button");
+    settingsBtn.id = "settingsBtn";
+    settingsBtn.type = "button";
+    settingsBtn.className = "icon-btn";
+    settingsBtn.textContent = "⚙";
+    actions.appendChild(settingsBtn);
+  }
+
+  if (!document.getElementById("userPill")) {
+    const userPill = document.createElement("div");
+    userPill.id = "userPill";
+    userPill.className = "user-pill";
+    actions.appendChild(userPill);
+  }
+
+  if (!document.getElementById("logoutBtn")) {
+    const logoutBtn = document.createElement("button");
+    logoutBtn.id = "logoutBtn";
+    logoutBtn.type = "button";
+    logoutBtn.className = "btn btn-secondary";
+    logoutBtn.textContent = "Logout";
+    actions.appendChild(logoutBtn);
+  }
+
+  // Content area
+  contentArea = document.getElementById("contentArea");
+  if (!contentArea) {
+    contentArea = document.createElement("div");
+    contentArea.id = "contentArea";
+    root.appendChild(contentArea);
+  }
+
+  // Modal root
+  modalRoot = document.getElementById("modalRoot");
+  if (!modalRoot) {
+    modalRoot = document.createElement("div");
+    modalRoot.id = "modalRoot";
+    root.appendChild(modalRoot);
+  }
+}
+
 /* =========================
    Init
 ========================= */
-// Backfill manufacturer on existing objects (existing DB assumed to be Anisa).
 ensureManufacturerOnExistingPos();
 
-function bootApp(){ render(); }
+function bootApp(){ ensureBaseDom(); clearSession(); render(); }
 if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", bootApp, { once:true });
 else bootApp();
