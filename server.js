@@ -65,5 +65,5 @@ app.post("/api/customers", (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`Server running: http://localhost:${PORT}/main.html`);
+  console.log(`Server running: http://localhost:${PORT}/index.html`);
 });
