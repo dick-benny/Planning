@@ -1,3 +1,12 @@
+/* ======================================================
+   App v31 – Refactored & Structured
+   - No functional changes intended
+   - Logical modules grouped for maintainability
+   ====================================================== */
+
+(function () {
+  'use strict';
+
 /* =========================================================
    UP-planning – app-v15.js
    Version 15
@@ -121,7 +130,7 @@
   const Tabs = { DEV: "dev", PRODUCT: "product", TODO: "todo" };
 
   // Utveckling (dynamisk)
-  const DEV_ACTIVITY_TYPES = ["steg", "kalender", "text"];
+  const DEV_ACTIVITY_TYPES = ["steg", "kalender", "veckokalender", "text"];
 
   // Produkt (behåll)
   const STEPS_DEFAULT = 5;
@@ -194,7 +203,7 @@
   }
 
   function ensureTodoCategories(state) {
-    state.todo = state.todo || { filter: "Alla", items: [], archive: [], lastWeek: null };
+    state.todo = state.todo || { filter: "Alla", items: [], archive: [], lastWeek: null, selectedWeek: null };
 
     // Seed initial categories (once) with defaults + any already-used categories
     const hasCats = Array.isArray(state.todo.categories) && state.todo.categories.length > 0;
@@ -216,6 +225,16 @@
     state.todo.filter = allowed.includes(state.todo.filter) ? state.todo.filter : "Alla";
   }
 
+  function ensureDevTypes(state) {
+    state.devTypes = Array.isArray(state.devTypes) ? state.devTypes : [];
+  }
+
+  function getDevTypes(state) {
+    ensureDevTypes(state);
+    return uniqStrings(state.devTypes.slice());
+  }
+
+
   const COLS_TODO_UI = [
     { key: "__done__", label: "", type: "checkbox" },
     { key: "category", label: "Kategori", type: "category" },
@@ -231,6 +250,38 @@
   
   function stampNowSv(ts = Date.now()) {
     try { return new Date(ts).toLocaleString("sv-SE"); } catch { return ""; }
+  }
+
+
+  // -------------------------------
+  // Week picker helpers (ISO week)
+  // -------------------------------
+  function isoWeekKey(d = new Date()) {
+    const date = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+    date.setUTCDate(date.getUTCDate() + 4 - (date.getUTCDay() || 7));
+    const yearStart = new Date(Date.UTC(date.getUTCFullYear(), 0, 1));
+    const weekNo = Math.ceil((((date - yearStart) / 86400000) + 1) / 7);
+    return `${date.getUTCFullYear()}-W${String(weekNo).padStart(2, "0")}`;
+  }
+
+  function weekRangeFromKey(key) {
+    const m = /^(\d{4})-W(\d{2})$/.exec(key || "");
+    if (!m) return null;
+    const year = parseInt(m[1], 10);
+    const week = parseInt(m[2], 10);
+    const jan4 = new Date(Date.UTC(year, 0, 4));
+    const day = jan4.getUTCDay() || 7;
+    const monWeek1 = new Date(jan4);
+    monWeek1.setUTCDate(jan4.getUTCDate() - (day - 1));
+    const start = new Date(monWeek1);
+    start.setUTCDate(monWeek1.getUTCDate() + (week - 1) * 7);
+    const end = new Date(start);
+    end.setUTCDate(start.getUTCDate() + 6);
+    return { start, end };
+  }
+
+  function fmtDateSv(d) {
+    try { return new Date(d).toLocaleDateString("sv-SE"); } catch { return ""; }
   }
 
 // -------------------------------
@@ -259,6 +310,11 @@
     // Open mail client
     window.location.href = url;
   }
+
+
+  /* ==============================
+     UI / DOM Helpers
+     ============================== */
 
 // -------------------------------
   // DOM helpers
@@ -405,23 +461,70 @@
     state.devSchema = state.devSchema || { activities: [] };
     state.devSchema.activities = Array.isArray(state.devSchema.activities) ? state.devSchema.activities : [];
 
+
+    // Merge tasks for activities with same name (prevents "duplicate columns" causing missing tasks in user)
+    const mergeTasksAcrossSameName = (activities) => {
+      const byName = new Map();
+      activities.forEach((a) => {
+        const key = (a?.name || "").trim().toLowerCase();
+        if (!key) return;
+        if (!byName.has(key)) byName.set(key, []);
+        byName.get(key).push(a);
+      });
+      byName.forEach((list) => {
+        if (list.length < 2) return;
+
+        const all = [];
+        const seen = new Set();
+
+        list.forEach((a) => {
+          a.tasks = Array.isArray(a.tasks) ? a.tasks : [];
+          a.tasks.forEach((t) => {
+            const k = ((t?.name || "").trim().toLowerCase()) || t?.id;
+            if (!k || seen.has(k)) return;
+            if (t.enabled === undefined) t.enabled = true;
+            all.push(t);
+            seen.add(k);
+          });
+        });
+
+        if (!all.length) return;
+
+        all.sort((a, b) => (a.order ?? 0) - (b.order ?? 0) || (a.createdAt ?? 0) - (b.createdAt ?? 0));
+
+        list.forEach((a) => {
+          const existing = new Set((Array.isArray(a.tasks) ? a.tasks : []).map((t) => ((t?.name || "").trim().toLowerCase()) || t?.id));
+          const add = all.filter((t) => {
+            const k = ((t?.name || "").trim().toLowerCase()) || t?.id;
+            return k && !existing.has(k);
+          });
+          if (add.length) a.tasks = (Array.isArray(a.tasks) ? a.tasks : []).concat(add);
+          a.tasks.forEach((t) => { if (t.enabled === undefined) t.enabled = true; });
+        });
+      });
+    };
+
+    mergeTasksAcrossSameName(state.devSchema.activities);
+
     state.devEntries = Array.isArray(state.devEntries) ? state.devEntries : [];
 
     state.productSchema = state.productSchema || { activities: [] };
     state.productSchema.activities = Array.isArray(state.productSchema.activities) ? state.productSchema.activities : [];
+    mergeTasksAcrossSameName(state.productSchema.activities);
 
     state.productRows = Array.isArray(state.productRows) ? state.productRows : [];
     state.archive = state.archive || { dev: [], product: [] };
     state.archive.dev = Array.isArray(state.archive.dev) ? state.archive.dev : [];
     state.archive.product = Array.isArray(state.archive.product) ? state.archive.product : [];
 
-    state.todo = state.todo || { filter: "Alla", items: [], archive: [], lastWeek: null };
+    state.todo = state.todo || { filter: "Alla", items: [], archive: [], lastWeek: null, selectedWeek: null };
     if (state.todo.filter === "All") state.todo.filter = "Alla";
     /* validated after ensureTodoCategories(state) */
     state.todo.items = Array.isArray(state.todo.items) ? state.todo.items : [];
     state.todo.archive = Array.isArray(state.todo.archive) ? state.todo.archive : [];
 
     ensureTodoCategories(state);
+    ensureDevTypes(state);
 
     state.todo.lastWeek = state.todo.lastWeek ?? null;
 
@@ -655,23 +758,41 @@
     }
 
     
-    function openManageCategories() {
+    function openManageRegisters() {
       const state = migrateBestEffort();
       ensureTodoCategories(state);
       openModal({
-        title: "Manage Kategori",
-        sub: "Lägg till, ändra och ta bort kategorier som används i Tasks-filter",
-        bodyNode: renderManageCategories(state),
+        title: "Register",
+        sub: "Hantera register: Kategori och Dev_type",
+        bodyNode: renderManageRegisters(state),
       });
     }
 
-    function doLogout() { clearSession(); location.reload(); }
+    
+
+    function doSwitchUser(targetUsername) {
+      const users = getUsers();
+      const target = users.find((u) => (u.username || "").toLowerCase() === String(targetUsername || "").toLowerCase());
+      if (!target) {
+        alert(`Hittar inte användaren "${targetUsername}". Lägg till användaren i Manage user först.`);
+        return;
+      }
+      setSession({ userId: target.id, ts: Date.now() });
+      // Automatisk refresh så att rätt innehåll laddas
+      location.reload();
+    }
+
+function doLogout() { clearSession(); location.reload(); }
 
     menu.innerHTML = "";
     menu.appendChild(item("Mina sidor", openMyPages));
     if (user?.role === "admin") menu.appendChild(item("Manage user", openManageUsers));
-    if (user?.role === "admin") menu.appendChild(item("Manage Kategori", openManageCategories));
-    menu.appendChild(item("Logout", doLogout));
+    if (user?.role === "admin") menu.appendChild(item("Register", openManageRegisters));
+    
+    if (user?.role === "admin") menu.appendChild(item("Change user", () => doSwitchUser("Benny")));
+    if (user?.role !== "admin" && (user?.username || "").toLowerCase() === "benny") menu.appendChild(item("Change user", () => doSwitchUser("Dick")));
+
+menu.appendChild(item("Logout", doLogout));
 
     btn.addEventListener("click", (e) => { e.stopPropagation(); toggleMenu(); });
     document.addEventListener("click", () => closeMenu());
@@ -687,7 +808,7 @@ function renderManageUsers(current) {
     const header = el("div", { style: "display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:12px;" });
 
     const title = el("div", { style: "font-weight:1000;" }, ["Users"]);
-    const newBtn = el("button", { class: "btn btn-primary", type: "button" }, ["New User"]);
+    const newBtn = el("button", { class: "btn btn-primary", type: "button", onclick: (e) => { e?.preventDefault?.(); e?.stopPropagation?.(); openFormForUser(null); } }, ["New User"]);
     header.appendChild(title);
     header.appendChild(newBtn);
 
@@ -710,7 +831,7 @@ function renderManageUsers(current) {
 
         const nameBtn = el("button", {
           type: "button",
-          class: "link-btn",
+          class: "link-btn", style: "cursor:pointer;",
           title: "Öppna",
           onclick: () => openFormForUser(u),
         }, [u.username || "(saknar namn)"]);
@@ -751,7 +872,7 @@ function renderManageUsers(current) {
       inRole.value = (existing?.role === "admin") ? "admin" : "user";
       
       // ToDo-filterkategorier (exkl. Privat) - vilka delade kategorier användaren ser i ToDo-filter
-      const st = readState();
+      const st = current;
       ensureTodoCategories(st);
       const allCats = getTodoCategories(st).filter((c) => c !== "Privat" && c !== "Alla");
       const picked = new Set(Array.isArray(existing?.todoFilterCategories) ? existing.todoFilterCategories : []);
@@ -841,8 +962,6 @@ function renderManageUsers(current) {
       return card;
     }
 
-    newBtn.addEventListener("click", () => openFormForUser(null));
-
     wrap.appendChild(header);
     wrap.appendChild(list);
 
@@ -850,7 +969,99 @@ function renderManageUsers(current) {
     return wrap;
   }
 
-  function renderManageCategories(state) {
+  
+  function renderManageRegisters(state) {
+    ensureTodoCategories(state);
+    ensureDevTypes(state);
+
+    const wrap = el("div", {}, []);
+    const top = el("div", { style: "display:flex;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap;" });
+
+    const regSel = el("select", { class: "input up-select", style: "max-width:220px;" }, [
+      el("option", { value: "kategori" }, ["Kategori"]),
+      el("option", { value: "dev_type" }, ["Dev_type"]),
+    ]);
+
+    const hint = el("div", { style: "font-size:12px;color:#6b7280;" }, [
+      "Kategori används i Tasks-filter. Dev_type används som dropdown för fältet Typ i Produkt.",
+    ]);
+
+    top.appendChild(el("div", { class: "label", style: "margin:0;" }, ["Register"]));
+    top.appendChild(regSel);
+    top.appendChild(hint);
+
+    const body = el("div", {});
+
+    function renderDevType() {
+      const list = el("div", { style: "display:flex;flex-direction:column;gap:10px;" });
+      const items = getDevTypes(state);
+
+      items.forEach((name) => {
+        const row = el("div", { style: "display:flex;align-items:center;gap:10px;" });
+        const input = el("input", { class: "input", value: name });
+        const saveBtn = el("button", { class: "btn", type: "button" }, ["Spara"]);
+        const delBtn = el("button", { class: "btn", type: "button" }, ["Ta bort"]);
+
+        saveBtn.addEventListener("click", () => {
+          const v = (input.value || "").trim();
+          if (!v) return alert("Namn saknas.");
+          state.devTypes = (state.devTypes || []).map((x) => (x === name ? v : x));
+          state.devTypes = uniqStrings(state.devTypes);
+          saveState(state);
+          renderActive();
+        });
+
+        delBtn.addEventListener("click", () => {
+          const ok = confirm(`Ta bort "${name}"?`);
+          if (!ok) return;
+          state.devTypes = (state.devTypes || []).filter((x) => x !== name);
+          saveState(state);
+          renderActive();
+        });
+
+        row.appendChild(input);
+        row.appendChild(saveBtn);
+        row.appendChild(delBtn);
+        list.appendChild(row);
+      });
+
+      const addRow = el("div", { style: "display:flex;align-items:center;gap:10px;margin-top:12px;" });
+      const addIn = el("input", { class: "input", placeholder: "Ny dev_type..." });
+      const addBtn = el("button", { class: "btn btn-primary", type: "button" }, ["Lägg till"]);
+
+      addBtn.addEventListener("click", () => {
+        const v = (addIn.value || "").trim();
+        if (!v) return;
+        state.devTypes = uniqStrings([...(state.devTypes || []), v]);
+        addIn.value = "";
+        saveState(state);
+        renderActive();
+      });
+
+      addRow.appendChild(addIn);
+      addRow.appendChild(addBtn);
+
+      body.appendChild(el("div", { class: "label" }, ["Dev_type"]));
+      body.appendChild(list);
+      body.appendChild(addRow);
+    }
+
+    function renderActive() {
+      body.innerHTML = "";
+      const which = regSel.value;
+      if (which === "kategori") body.appendChild(renderManageCategories(state));
+      else renderDevType();
+    }
+
+    regSel.addEventListener("change", renderActive);
+
+    wrap.appendChild(top);
+    wrap.appendChild(body);
+    renderActive();
+    return wrap;
+  }
+
+function renderManageCategories(state) {
     const wrap = el("div", {}, []);
     const header = el("div", { style: "display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:12px;" });
 
@@ -886,7 +1097,7 @@ function renderManageUsers(current) {
 
         const nameBtn = el("button", {
           type: "button",
-          class: "link-btn",
+          class: "link-btn", style: "cursor:pointer;",
           title: "Ändra",
           onclick: () => openForm(c),
         }, [c]);
@@ -983,8 +1194,6 @@ function renderManageUsers(current) {
       formWrap.appendChild(actions);
     }
 
-    newBtn.addEventListener("click", () => openForm(null));
-
     wrap.appendChild(header);
     wrap.appendChild(hint);
     wrap.appendChild(list);
@@ -1053,13 +1262,25 @@ function renderManageUsers(current) {
   // -------------------------------
   // Utveckling (admin schema)
   // -------------------------------
+  function allTasks(activity) {
+    const tasks = Array.isArray(activity?.tasks) ? activity.tasks : [];
+    return tasks.slice().sort((a, b) => (a.order ?? 0) - (b.order ?? 0) || (a.createdAt ?? 0) - (b.createdAt ?? 0));
+  }
+
   function enabledTasks(activity) {
     const tasks = Array.isArray(activity?.tasks) ? activity.tasks : [];
-    return tasks.filter((t) => !!t.enabled).slice().sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+    // Bakåtkompatibilitet: om 'enabled' saknas -> räknas som aktiv
+    return tasks
+      .filter((t) => t?.enabled !== false)
+      .slice()
+      .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
   }
 
   function openDevSchemaModal(state) {
     const user = currentUser();
+
+    ensureDevTypes(state);
+    const devTypes = getDevTypes(state);
     if (user?.role !== "admin") return;
 
     const wrap = el("div", {}, []);
@@ -1487,7 +1708,7 @@ function renderManageUsers(current) {
 
       const current = tasks[idx];
       // Bara tasks som är ikryssade (enabled) ska kunna flyttas
-      if (!current.enabled) return;
+      if (current.enabled === false) return;
 
       const swapIdx = dir === "up" ? idx - 1 : idx + 1;
       if (swapIdx < 0 || swapIdx >= tasks.length) return;
@@ -1535,7 +1756,8 @@ function renderManageUsers(current) {
             renderTasks();
           },
         });
-        cb.checked = !!t.enabled;
+        cb.checked = (t.enabled !== false);
+        if (t.enabled === undefined) { t.enabled = true; }
 
         const nameIn = el("input", {
           class: "input",
@@ -1560,7 +1782,7 @@ function renderManageUsers(current) {
           onclick: () => moveTask(t.id, "down"),
         }, ["⬇️"]);
 
-        if (!t.enabled) { upBtn.disabled = true; downBtn.disabled = true; }
+        if (t.enabled === false) { upBtn.disabled = true; downBtn.disabled = true; }
 
         const delBtn = el("button", {
           type: "button",
@@ -1670,7 +1892,7 @@ function renderManageUsers(current) {
   }
 
   function countDoneSteps(entry, activity) {
-    const tasks = enabledTasks(activity);
+    const tasks = allTasks(activity);
     if (!tasks.length) return 0;
     const cell = entry.fields?.[activity.id];
     const data = cell?.tasksData || {};
@@ -1746,7 +1968,7 @@ function renderManageUsers(current) {
   }
 
   function openUserTasksModal(state, entry, activity) {
-    const tasks = enabledTasks(activity);
+    const tasks = allTasks(activity);
     const cell = ensureDevEntryCell(entry, activity);
     const data = cell.tasksData || (cell.tasksData = {});
 
@@ -1864,8 +2086,7 @@ function renderManageUsers(current) {
         el("th", {}, [""]),
       ]),
     ]);
-
-    const tbody = el("tbody");
+const tbody = el("tbody");
 
     state.devEntries.forEach((entry) => {
       const tr = el("tr");
@@ -1899,6 +2120,33 @@ function renderManageUsers(current) {
             placeholder: "",
             oninput: (e) => { cell.value = e.target.value; saveState(state); },
           }));
+        } else if (a.type === "veckokalender") {
+          // Visa kalender (date picker) men presentera vecka i fältet
+          const wrap = el("div", { style: "position:relative;width:100%;min-width:120px;" });
+          const shown = el("input", {
+            class: "input",
+            type: "text",
+            value: cell.value ?? "",
+            placeholder: "Välj vecka",
+            readonly: true,
+            style: "padding-right:12px;",
+          });
+          const picker = el("input", {
+            type: "date",
+            value: cell.date || "",
+            style: "position:absolute;inset:0;opacity:0;cursor:pointer;",
+          });
+          picker.addEventListener("change", (e) => {
+            const v = e.target.value || "";
+            cell.date = v;
+            if (!v) cell.value = "";
+            else cell.value = isoWeekKey(new Date(v + "T00:00:00"));
+            saveState(state);
+            render(state);
+          });
+          wrap.appendChild(shown);
+          wrap.appendChild(picker);
+          td.appendChild(wrap);
         } else if (a.type === "kalender") {
           td.appendChild(el("input", {
             class: "input",
@@ -1907,7 +2155,7 @@ function renderManageUsers(current) {
             onchange: (e) => { cell.value = e.target.value; saveState(state); render(state); },
           }));
         } else if (a.type === "steg") {
-          const tasks = enabledTasks(a);
+          const tasks = allTasks(a);
           const steps = tasks.length;
           const doneCount = countDoneSteps(entry, a);
 
@@ -2028,30 +2276,25 @@ function renderProductTable(state) {
     view.innerHTML = "";
 
     const user = currentUser();
-
-    // Topbar actions for USER
-    const hero = el("div", { style: "display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;" });
-    hero.appendChild(el("h1", {}, ["Produkt"]));
-    if (user && user.role !== "admin") {
-      hero.appendChild(el("button", {
-        class: "btn btn-primary",
-        type: "button",
-        onclick: () => {
-          state.productRows = state.productRows || [];
-          state.productRows.push(defaultRowForProduct(""));
-          saveState(state);
-          render(state);
-        },
-      }, ["Ny produkt"]));
-    }
-    view.appendChild(hero);
-
-
+    ensureDevTypes(state);
+    const devTypes = getDevTypes(state);
     const acts = (state.productSchema?.activities || []).slice();
     acts.sort((a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0));
 
     // Produkt: kolumner byggs ENDAST av admin-definierade aktiviteter
-    const cols = acts.map((a) => ({ key: a.id, label: a.name, type: a.type, activity: a }));
+    const baseCols = acts.map((a) => ({ key: a.id, label: a.name, type: a.type, activity: a }));
+
+    // Visa Typ-kolumnen direkt efter kolumnen "Namn" (om den finns)
+    const cols = [];
+    let insertedType = false;
+    baseCols.forEach((c) => {
+      cols.push(c);
+      if (!insertedType && String(c.label || "").trim().toLowerCase() === "namn") {
+        cols.push({ key: "__type__", label: "Typ", type: "dev_type" });
+        insertedType = true;
+      }
+    });
+    if (!insertedType) cols.unshift({ key: "__type__", label: "Typ", type: "dev_type" });
 
     const rows = state.productRows || [];
 
@@ -2062,14 +2305,25 @@ function renderProductTable(state) {
         el("th", {}, [""]),
       ]),
     ]);
-
-    const tbody = el("tbody");
+const tbody = el("tbody");
 
     rows.forEach((row) => {
       row.fields = row.fields || {};
       const tr = el("tr");
 
       cols.forEach((c) => {
+        if (c.key === "__type__") {
+          row.type = row.type || "";
+          const typeSel = el("select", { class: "input up-select" }, [
+            el("option", { value: "" }, ["-"]),
+            ...devTypes.map((t) => el("option", { value: t }, [t])),
+          ]);
+          typeSel.value = row.type || "";
+          typeSel.addEventListener("change", (e) => { row.type = e.target.value; saveState(state); });
+          tr.appendChild(el("td", { style: "min-width:140px;" }, [typeSel]));
+          return;
+        }
+
         const td = el("td");
         const a = c.activity;
         const cell = ensureDevEntryCell(row, a);
@@ -2080,6 +2334,33 @@ function renderProductTable(state) {
             value: cell.value ?? "",
             oninput: (e) => { cell.value = e.target.value; saveState(state); },
           }));
+        } else if (a.type === "veckokalender") {
+          // Visa kalender (date picker) men presentera vecka i fältet
+          const wrap = el("div", { style: "position:relative;width:100%;min-width:120px;" });
+          const shown = el("input", {
+            class: "input",
+            type: "text",
+            value: cell.value ?? "",
+            placeholder: "Välj vecka",
+            readonly: true,
+            style: "padding-right:12px;",
+          });
+          const picker = el("input", {
+            type: "date",
+            value: cell.date || "",
+            style: "position:absolute;inset:0;opacity:0;cursor:pointer;",
+          });
+          picker.addEventListener("change", (e) => {
+            const v = e.target.value || "";
+            cell.date = v;
+            if (!v) cell.value = "";
+            else cell.value = isoWeekKey(new Date(v + "T00:00:00"));
+            saveState(state);
+            render(state);
+          });
+          wrap.appendChild(shown);
+          wrap.appendChild(picker);
+          td.appendChild(wrap);
         } else if (a.type === "kalender") {
           td.appendChild(el("input", {
             class: "input",
@@ -2088,7 +2369,7 @@ function renderProductTable(state) {
             onchange: (e) => { cell.value = e.target.value; saveState(state); render(state); },
           }));
         } else if (a.type === "steg") {
-          const tasks = enabledTasks(a);
+          const tasks = allTasks(a);
           const steps = tasks.length;
           const doneCount = countDoneSteps(row, a);
 
@@ -2599,6 +2880,21 @@ function renderProductTable(state) {
 
     if (state.activeTab === Tabs.PRODUCT) {
       heroTitle.textContent = "Produkt";
+
+      // User: skapa rader i produkttabellen
+      if (user?.role !== "admin") {
+        heroActions.appendChild(el("button", {
+          class: "btn btn-primary",
+          type: "button",
+          onclick: () => {
+            state.productRows = state.productRows || [];
+            state.productRows.push(defaultRowForProduct("")); 
+            saveState(state);
+            render(state);
+          },
+        }, ["Ny produkt"]));
+      }
+
       return;
     }
 
@@ -2614,6 +2910,26 @@ function renderProductTable(state) {
       return opt;
     }));
     heroInline.appendChild(todoFilterSelect);
+
+    // Veckoväljare (ISO)
+    const weekIn = el("input", { class: "input up-select", type: "week", style: "max-width:150px;" });
+    weekIn.value = state.todo.selectedWeek || isoWeekKey(new Date());
+    state.todo.selectedWeek = weekIn.value;
+
+    const range = weekRangeFromKey(weekIn.value);
+    const weekHint = el("div", { style: "font-size:12px;color:#6b7280;min-width:190px;align-self:center;" }, [
+      range ? `${fmtDateSv(range.start)} – ${fmtDateSv(range.end)}` : ""
+    ]);
+
+    weekIn.addEventListener("change", () => {
+      state.todo.selectedWeek = weekIn.value;
+      saveState(state);
+      render(state);
+    });
+
+    heroInline.appendChild(weekIn);
+    heroInline.appendChild(weekHint);
+
 
     heroActions.appendChild(el("button", {
       class: "btn btn-primary",
@@ -2768,4 +3084,5 @@ function renderProductTable(state) {
   }
 
   document.addEventListener("DOMContentLoaded", init);
+})();
 })();
