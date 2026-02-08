@@ -1,43 +1,5 @@
-/* ======================================================
-   App v31 – Refactored & Structured
-   - No functional changes intended
-   - Logical modules grouped for maintainability
-   ====================================================== */
-
-(function () {
-  'use strict';
-
-/* =========================================================
-   UP-planning – app-v15.js
-   Version 15
-   STOR FÖRÄNDRING: Utveckling (dynamisk struktur definierad av admin)
-
-   - Admin (Utveckling):
-     * Knapp: "Definiera utvecklingstabell" -> modal med lista av aktiviteter
-     * Knapp: "Ny aktivitet" -> form: Namn + Typ (steg/kalender/text)
-     * Varje aktivitet-rad: "Def Tasks" -> modal med tasks för aktiviteten
-       - Knapp: "New Task" -> form: Namn + Save/Cancel (stänger)
-       - Task-tabell: inledande checkbox (Enabled). När ikryssad går det att
-         ändra ordning med upp-/nedåtpil.
-   - User (Utveckling):
-     * Tabellen byggs av aktiviteterna admin definierat
-     * Typ = steg -> visar progress-stapel med antal steg = antal Enabled tasks
-       (klick öppnar checklist för tasks)
-     * Typ = kalender -> date input
-     * Typ = text -> text input
-
-   Behåller i stort:
-   - Login + Settings (Mina sidor / Logout, admin ser Manage user)
-   - Manage user (klick namn -> edit/new)
-   - Tasks (privat logik, notes, overdue, ny todo via formulär)
-   - Produkt-tabellen (oförändrad från tidigare v14)
-
-   OBS: Front-end demo utan backend. All data sparas i localStorage.
-   ========================================================= */
-
 (() => {
   "use strict";
-
   // -------------------------------
   // AUTH (localStorage)
   // -------------------------------
@@ -46,6 +8,12 @@
 
   function uid(prefix = "id") {
     return `${prefix}_${Math.random().toString(16).slice(2)}_${Date.now().toString(16)}`;
+  }
+
+  function truncateText(str, maxLen = 26) {
+    const full = (str ?? "").toString();
+    if (full.length <= maxLen) return { short: full, full, truncated: false };
+    return { short: full.slice(0, Math.max(0, maxLen - 1)) + "…", full, truncated: true };
   }
 
   function loadJson(key) {
@@ -109,8 +77,10 @@
   // -------------------------------
   // APP STORAGE
   // -------------------------------
+  const STORAGE_KEY_V16 = "up_planning_v16";
   const STORAGE_KEY_V15 = "up_planning_v15";
   const STORAGE_KEYS_OLD = [
+    "up_planning_v15",
     "up_planning_v14",
     "up_planning_v13",
     "up_planning_v12",
@@ -127,10 +97,216 @@
     "up_planning_v1",
   ];
 
-  const Tabs = { DEV: "dev", PRODUCT: "product", TODO: "todo" };
+  const Tabs = { DEV: "dev", PRODUCT: "product", TODO: "todo", ROUTINES: "routines" };
 
-  // Utveckling (dynamisk)
-  const DEV_ACTIVITY_TYPES = ["steg", "kalender", "veckokalender", "text"];
+  // Single source of truth for visible tabs.
+  // Add new tabs here, and implement them in renderHero/renderView switches below.
+  const TAB_CONFIG = [
+    { key: Tabs.DEV, label: "Utvecklingsprocess", title: "Utvecklingsprocess" },
+    { key: Tabs.PRODUCT, label: "Säljprocess", title: "Säljprocess Ny produkt" },
+    { key: Tabs.TODO, label: "ToDo", title: "ToDo" },
+    { key: Tabs.ROUTINES, label: "Rutiner", title: "Rutiner" },
+  ];
+
+  // ---- Role helpers (top-level) ----
+  function isAdmin(user) {
+    return String(user?.role || "").toLowerCase() === "admin";
+  }
+
+
+  // -------------------------------
+  // USP Activity Field helpers (status + notes + owner)
+  // -------------------------------
+  function nextActivityStatus(cur) {
+    if (!cur) return "green";
+    if (cur === "green") return "yellow";
+    if (cur === "yellow") return "red";
+    return null;
+  }
+
+  function canEditActivityStatus(cell, user) {
+    if (isAdmin(user)) return true;
+    const me = (user?.initials || "").toUpperCase();
+    const owner = (cell?.ownerInitials || "").toUpperCase();
+    return Boolean(me && owner && me === owner);
+  }
+
+  function openOwnerPickerModal(state, cell) {
+    const users = getUsers();
+    const initials = users
+      .map((u) => (u.initials || "").toUpperCase())
+      .filter(Boolean)
+      .sort((a, b) => a.localeCompare(b, "sv", { sensitivity: "base" }));
+
+    const wrap = el("div", { style: "display:flex;flex-wrap:wrap;gap:10px;" }, []);
+
+    const mkBtn = (label, val) => el("button", {
+      type: "button",
+      class: "pill",
+      onclick: () => {
+        cell.ownerInitials = val || "";
+        saveState(state);
+        render(state);
+        closeModal();
+      },
+    }, [label]);
+
+    wrap.appendChild(mkBtn("--", ""));
+    initials.forEach((ini) => wrap.appendChild(mkBtn(ini, ini)));
+
+    openModal({
+      title: "Ansvarig",
+      sub: "Högerklick på initialerna för att välja ansvar.",
+      bodyNode: wrap,
+    });
+  }
+
+  
+  function makeRowActionMenu({ onDone, onDelete }) {
+    const wrap = el("div", { class: "row-actions" });
+    const btn = el("button", { class: "btn btn-light btn-small action-btn", type: "button" }, ["Action ▾"]);
+    const menu = el("div", { class: "action-menu hidden" }, [
+      el("button", { class: "action-item", type: "button", onclick: () => { menu.classList.add("hidden"); onDone && onDone(); } }, ["Done"]),
+      el("button", { class: "action-item danger", type: "button", onclick: () => { menu.classList.add("hidden"); onDelete && onDelete(); } }, ["Ta bort"]),
+    ]);
+
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      menu.classList.toggle("hidden");
+    });
+
+    document.addEventListener("click", () => menu.classList.add("hidden"));
+    wrap.appendChild(btn);
+    wrap.appendChild(menu);
+    return wrap;
+  }
+
+function openActivityNotesModal(state, entryOrRow, activity, user) {
+  const cell = ensureDevEntryCell(entryOrRow, activity);
+  const me = ((user?.initials || "") + "").toUpperCase().slice(0, 2);
+
+  // Normalize legacy notes/comments into an array of {ts, by, text}
+  const raw = Array.isArray(cell.comments) ? cell.comments : [];
+  const notes = raw
+    .map((x) => {
+      if (!x) return null;
+      if (typeof x === "string") return { ts: Date.now(), by: "", text: x };
+      if (typeof x === "object") {
+        return {
+          ts: typeof x.ts === "number" ? x.ts : Date.now(),
+          by: (x.by || x.initials || "").toString().toUpperCase().slice(0, 2),
+          text: (x.text || x.note || x.comment || "").toString(),
+        };
+      }
+      return null;
+    })
+    .filter(Boolean);
+
+  const wrap = el("div", {}, []);
+
+  const list = el("div", { class: "notes-list" }, []);
+  function renderList() {
+    list.innerHTML = "";
+    if (!notes.length) {
+      list.appendChild(el("div", { style: "color:#6b7280;padding:8px 0;" }, ["Inga anteckningar ännu."]));
+      return;
+    }
+    notes
+      .slice()
+      .sort((a, b) => b.ts - a.ts)
+      .forEach((n) => {
+        const d = new Date(n.ts);
+        const dateStr = isNaN(d.getTime()) ? "" : d.toISOString().slice(0, 10);
+        const meta = [dateStr, n.by].filter(Boolean).join(" • ");
+        list.appendChild(
+          el("div", { class: "note-item" }, [
+            el("div", { class: "note-meta" }, [meta || ""]),
+            el("div", { class: "note-text" }, [n.text]),
+          ])
+        );
+      });
+  }
+  renderList();
+
+  const input = el("textarea", {
+    placeholder: "Skriv en kort anteckning…",
+    rows: 2,
+    style:
+      "width:100%;resize:none;border:1px solid #e5e7eb;border-radius:12px;padding:10px 12px;font-size:14px;line-height:1.3;",
+  });
+
+  const actions = el(
+    "div",
+    { style: "display:flex;gap:8px;justify-content:flex-end;margin-top:10px;" },
+    [
+      el(
+        "button",
+        { class: "btn btn-light btn-small", type: "button", onclick: () => closeModal() },
+        ["Stäng"]
+      ),
+      el(
+        "button",
+        {
+          class: "btn btn-primary btn-small",
+          type: "button",
+          onclick: () => {
+            const t = (input.value || "").trim();
+            if (!t) return;
+            notes.push({ ts: Date.now(), by: me, text: t });
+            cell.comments = notes;
+            saveState(state);
+            input.value = "";
+            renderList();
+            render(state); // update initials highlight
+          },
+        },
+        ["Lägg till"]
+      ),
+    ]
+  );
+
+  wrap.appendChild(list);
+  wrap.appendChild(el("div", { style: "height:10px;" }, [""]));
+  wrap.appendChild(input);
+  wrap.appendChild(actions);
+
+  openModal({
+    title: "Notes",
+    sub: activity.label || activity.key || "",
+    bodyNode: wrap,
+    showFooterClose: false,
+  });
+
+  setTimeout(() => input.focus(), 50);
+}
+
+  function isKnownTab(tabKey) {
+    return TAB_CONFIG.some(t => t.key === tabKey);
+  }
+
+  function ensureValidActiveTab(state) {
+    // Guard against corrupted state or mismatched tab config
+    if (!state) return;
+    if (!state.activeTab || !isKnownTab(state.activeTab)) {
+      state.activeTab = Tabs.TODO;
+    }
+  }
+
+  // Utvecklingsprocess (dynamisk)
+  const DEV_ACTIVITY_TYPES = ["text", "date", "veckonummer", "status"];
+
+  // Normalisera aktivitetstyp (bakåtkompatibel)
+  function normalizeActivityType(t) {
+    const x = (t || "").toString().trim().toLowerCase();
+    if (!x) return "text";
+    if (x === "kalender" || x === "date") return "date";
+    if (x === "veckokalender" || x === "weekcalendar" || x === "veckokalendar" || x === "weeknumber" || x === "veckonummer") return "veckonummer";
+    if (x === "status") return "status";
+    if (x === "text") return "text";
+    // fallback
+    return "text";
+  }
+
 
   // Produkt (behåll)
   const STEPS_DEFAULT = 5;
@@ -141,8 +317,8 @@
     { key: "po", label: "PO", type: "active" },
     { key: "price", label: "Pris", type: "active" },
     { key: "msMaterial", label: "MS-mtrl", type: "active" },
-    { key: "sellStartB2C", label: "Säljstart B2C", type: "passive" },
-    { key: "sellStartB2B", label: "Säljstart B2B", type: "passive" },
+    { key: "sellStartB2C", label: "Säljprocess Ny produktstart B2C", type: "passive" },
+    { key: "sellStartB2B", label: "Säljprocess Ny produktstart B2B", type: "passive" },
   ];
 
   // Tasks
@@ -226,10 +402,89 @@
   }
 
   function ensureDevTypes(state) {
-    state.devTypes = Array.isArray(state.devTypes) ? state.devTypes : [];
+    // devTypes används som register för dropdown (P-typ) i både Utvecklingsprocess och Säljprocess Ny produkt.
+    // Viktigt: vi ska aldrig "tömma" listan pga en saknad/ändrad struktur – vi försöker istället
+    // att bevara det som finns och återskapa från befintliga rader om det går.
+    const asArr = (v) => (Array.isArray(v) ? v : []);
+    const pickLegacy = () => {
+      // olika historiska nycklar som kan ha förekommit
+      return (
+        state.devTypes ??
+        state.dev_types ??
+        state.dev_type ??
+        state.devType ??
+        state.devtype ??
+        state.registerDevTypes ??
+        state.register?.devTypes ??
+        state.register?.dev_type ??
+        state.registers?.devTypes ??
+        state.registers?.dev_type ??
+        null
+      );
+    };
+
+    // Starta med nuvarande (om array), annars försök läsa legacy, annars tom array
+    const legacy = pickLegacy();
+    state.devTypes = asArr(state.devTypes);
+    if (!state.devTypes.length && Array.isArray(legacy) && legacy.length) {
+      state.devTypes = legacy.slice();
+    }
+
+    const found = [];
+    const add = (v) => {
+      if (v == null) return;
+      const s = String(v).trim();
+      if (!s) return;
+      found.push(s);
+    };
+
+    // Från Utvecklingsprocess-rader (toppfält)
+    (state.devEntries || []).forEach((e) => {
+      if (!e) return;
+      add(e.type);
+      add(e.devType);
+      add(e.ptype);
+      add(e.pType);
+    });
+
+    // Från Produkt-rader (toppfält)
+    (state.productRows || []).forEach((r) => {
+      if (!r) return;
+      add(r.type);
+      add(r.devType);
+      add(r.ptype);
+      add(r.pType);
+    });
+
+    // Normalisera + slå ihop
+    const merged = uniqStrings([...(state.devTypes || []), ...found]);
+
+    // Om vi fortfarande är tomma: behåll tomt (admin kan lägga till manuellt).
+    // Men om vi hittade något i data, spara det i registret så dropdown fungerar direkt.
+    state.devTypes = merged;
+
+    // Rensa legacy-nycklar (så vi inte får dubbla källor)
+    delete state.dev_types;
+    delete state.dev_type;
+    delete state.devType;
+    delete state.devtype;
+    if (state.register) {
+      delete state.register.devTypes;
+      delete state.register.dev_type;
+    }
+    if (state.registers) {
+      delete state.registers.devTypes;
+      delete state.registers.dev_type;
+    }
   }
 
-  function getDevTypes(state) {
+  function isTypeActivity(activity) {
+    const n = (activity?.name || "").toString().trim().toLowerCase();
+    const id = (activity?.id || "").toString().trim().toLowerCase();
+    return n === "typ" || n === "type" || n === "dev_type" || n === "devtype" || id === "typ" || id === "type";
+  }
+
+function getDevTypes(state) {
     ensureDevTypes(state);
     return uniqStrings(state.devTypes.slice());
   }
@@ -242,7 +497,6 @@
     { key: "assignee", label: "Ansvarig", type: "assignee" },
     { key: "dueDate", label: "Färdig", type: "date" },
     { key: "__notes__", label: "Notes", type: "notes" },
-    { key: "__comment__", label: "", type: "comment" },
     { key: "__trash__", label: "", type: "trash" },
   ];
 
@@ -285,14 +539,14 @@
   }
 
 // -------------------------------
-  // Comment mail helper (mailto)
+  // Notes mail helper (mailto)
   // -------------------------------
   function emailForInitials(initials) {
     const u = getUsers().find((x) => (x.initials || "").toUpperCase() === (initials || "").toUpperCase());
     return (u && u.email) ? u.email : "";
   }
 
-  function sendCommentMail(toInitialsList, subject, body) {
+  function sendNotesMail(toInitialsList, subject, body) {
     const emails = (toInitialsList || [])
       .map((ini) => emailForInitials(ini))
       .filter((e) => !!e);
@@ -336,17 +590,17 @@
   }
 
   function saveState(state) {
-    localStorage.setItem(STORAGE_KEY_V15, JSON.stringify(state));
+    localStorage.setItem(STORAGE_KEY_V16, JSON.stringify(state));
   }
 
   function defaultState() {
     return {
       activeTab: Tabs.DEV,
 
-      // Utveckling: schema + entries
+      // Utvecklingsprocess: schema + entries
       devSchema: {
         activities: [
-          // {id, name, type: 'steg'|'kalender'|'text', createdAt, tasks:[{id,name,enabled,order}]}
+          // {id, name, type: 'status'|'kalender'|'text', createdAt, tasks:[{id,name,enabled,order}]}
         ],
       },
       devEntries: [
@@ -358,7 +612,10 @@
       productRows: [],
       archive: { dev: [], product: [] },
 
-      // Tasks
+      // Register: dev_type (dropdown för P-typ)
+      devTypes: [],
+
+      // Tasks)
       todo: { filter: "Alla", items: [], archive: [], lastWeek: null, categories: TODO_DEFAULT_CATEGORIES.slice() },
     };
   }
@@ -402,7 +659,7 @@
   // Migration (best effort)
   // -------------------------------
   function migrateBestEffort() {
-    const cur = loadJson(STORAGE_KEY_V15);
+    const cur = loadJson(STORAGE_KEY_V16);
     if (cur) return normalizeState(cur);
 
     for (const k of STORAGE_KEYS_OLD) {
@@ -424,7 +681,16 @@
     // product rows
     s.productRows = old.productRows || old.prodRows || old.product?.rows || [];
 
-    // archives
+    
+// dev_type register
+s.devTypes =
+  old.devTypes ||
+  old.dev_types ||
+  old.dev_type ||
+  (old.register && (old.register.devTypes || old.register.dev_type)) ||
+  (old.registers && (old.registers.devTypes || old.registers.dev_type)) ||
+  [];
+// archives
     if (old.archive) {
       s.archive.product = old.archive.product || old.archive.prod || [];
       s.archive.dev = old.archive.dev || [];
@@ -461,8 +727,34 @@
     state.devSchema = state.devSchema || { activities: [] };
     state.devSchema.activities = Array.isArray(state.devSchema.activities) ? state.devSchema.activities : [];
 
+    state.productSchema = state.productSchema || { activities: [] };
+    state.productSchema.activities = Array.isArray(state.productSchema.activities) ? state.productSchema.activities : [];
 
-    // Merge tasks for activities with same name (prevents "duplicate columns" causing missing tasks in user)
+    // Normalisera typer + säkerställ ordning (så USER-tabeller följer Admin)
+    state.devSchema.activities.forEach((a, idx) => {
+      if (!a) return;
+      a.type = normalizeActivityType(a.type);
+      if (a.order == null && a.sortOrder == null && a.position == null) a.order = idx + 1;
+    });
+    state.productSchema.activities.forEach((a, idx) => {
+      if (!a) return;
+      a.type = normalizeActivityType(a.type);
+      if (a.order == null && a.sortOrder == null && a.position == null) a.order = idx + 1;
+    });
+
+    const sortActivitiesInPlace = (activities) => {
+      if (!Array.isArray(activities) || !activities.length) return;
+      const hasOrder = activities.some((a) => a?.order != null || a?.sortOrder != null || a?.position != null);
+      if (!hasOrder) return;
+      const ord = (x) => (x?.order ?? x?.sortOrder ?? x?.position ?? 0);
+      activities.sort((a, b) => ord(a) - ord(b));
+      // Re-sequence to remove gaps/duplicates and make Admin+User consistent
+      activities.forEach((a, i) => { if (a) a.order = i + 1; });
+    };
+
+    sortActivitiesInPlace(state.devSchema.activities);
+    sortActivitiesInPlace(state.productSchema.activities);
+// Merge tasks for activities with same name (prevents "duplicate columns" causing missing tasks in user)
     const mergeTasksAcrossSameName = (activities) => {
       const byName = new Map();
       activities.forEach((a) => {
@@ -513,6 +805,9 @@
     mergeTasksAcrossSameName(state.productSchema.activities);
 
     state.productRows = Array.isArray(state.productRows) ? state.productRows : [];
+
+    // Register: dev_type
+    ensureDevTypes(state);
     state.archive = state.archive || { dev: [], product: [] };
     state.archive.dev = Array.isArray(state.archive.dev) ? state.archive.dev : [];
     state.archive.product = Array.isArray(state.archive.product) ? state.archive.product : [];
@@ -538,7 +833,7 @@
         assignee: t.assignee || "Alla",
         dueDate: t.dueDate || t.date || "",
         notes: t.notes ?? "",
-      comments: [],
+        comments: Array.isArray(t.comments) ? t.comments : [],
         done: !!t.done,
         week: Number.isFinite(t.week) ? t.week : isoWeekNumber(new Date(t.createdAt || Date.now())),
         createdAt: t.createdAt || Date.now(),
@@ -574,9 +869,47 @@
     state.devEntries = state.devEntries.map((e) => ({
       id: e.id || uid("devE"),
       name: e.name ?? "",
+      type: e.type ?? e.devType ?? "", // dev_type
       fields: e.fields && typeof e.fields === "object" ? e.fields : {},
       createdAt: e.createdAt || Date.now(),
     }));
+
+    // Normalize product schema (endast aktiviteter, inte fasta kolumnerna Namn/Typ)
+    state.productSchema.activities = state.productSchema.activities.map((a, idx) => ({
+      id: a.id || uid("pact"),
+      name: (a.name || "").trim(),
+      type: DEV_ACTIVITY_TYPES.includes(a.type) ? a.type : "text",
+      // behåll explicit ordning om den finns
+      order: Number.isFinite(a.order) ? a.order : (Number.isFinite(a.sortOrder) ? a.sortOrder : (Number.isFinite(a.position) ? a.position : idx)),
+      createdAt: a.createdAt || Date.now(),
+      tasks: Array.isArray(a.tasks) ? a.tasks.map((t, tIdx) => ({
+        id: t.id || uid("pt"),
+        name: (t.name || "").trim(),
+        enabled: !!t.enabled,
+        order: Number.isFinite(t.order) ? t.order : tIdx,
+        createdAt: t.createdAt || Date.now(),
+      })) : [],
+    })).filter((a) => a.name.length > 0);
+
+    state.productSchema.activities.forEach((a) => {
+      a.tasks.sort((x, y) => (x.order ?? 0) - (y.order ?? 0));
+      a.tasks.forEach((t, i) => { t.order = i; });
+    });
+
+    // Normalize product rows
+    state.productRows = state.productRows.map((r) => {
+      const row = (r && typeof r === "object") ? r : {};
+      const name = row.name ?? row.prodName ?? row.title ?? "";
+      const type = row.type ?? row.devType ?? "";
+      const fields = (row.fields && typeof row.fields === "object") ? row.fields : {};
+      return {
+        id: row.id || uid("product"),
+        name,
+        type,
+        fields,
+        createdAt: row.createdAt || Date.now(),
+      };
+    });
 
     return state;
   }
@@ -584,7 +917,9 @@
   // -------------------------------
   // Modal
   // -------------------------------
-  function openModal({ title, sub, bodyNode }) {
+    let modalOnClose = null;
+
+  function openModal({ title, sub, bodyNode, onClose, showFooterClose = true }) {
     const backdrop = document.getElementById("modalBackdrop");
     const titleEl = document.getElementById("modalTitle");
     const subEl = document.getElementById("modalSub");
@@ -602,6 +937,11 @@
     body.innerHTML = "";
     body.appendChild(bodyNode);
 
+    // Optional close behavior per modal
+    modalOnClose = (typeof onClose === "function") ? onClose : null;
+    const footerClose = document.getElementById("modalCloseBtn2");
+    if (footerClose) footerClose.style.display = showFooterClose ? "inline-flex" : "none";
+
     // reflow
     void backdrop.offsetHeight;
 
@@ -614,13 +954,28 @@
 
   function wireModalClose() {
     const backdrop = document.getElementById("modalBackdrop");
-    document.getElementById("modalCloseBtn").addEventListener("click", closeModal);
-    document.getElementById("modalCloseBtn2").addEventListener("click", closeModal);
+
+    const handleClose = () => {
+      if (typeof modalOnClose === "function") {
+        const fn = modalOnClose;
+        modalOnClose = null; // prevent loops
+        fn();
+        return;
+      }
+      closeModal();
+    };
+
+    const closeBtn1 = document.getElementById("modalCloseBtn");
+    if (closeBtn1) closeBtn1.addEventListener("click", handleClose);
+    const closeBtn2 = document.getElementById("modalCloseBtn2");
+    if (closeBtn2) closeBtn2.addEventListener("click", handleClose);
+
     backdrop.addEventListener("click", (e) => {
-      if (e.target === backdrop) closeModal();
+      if (e.target === backdrop) handleClose();
     });
+
     window.addEventListener("keydown", (e) => {
-      if (e.key === "Escape") closeModal();
+      if (e.key === "Escape") handleClose();
     });
   }
 
@@ -634,10 +989,10 @@
 
     const topbar = el("div", { class: "topbar" }, [
       el("div", { class: "brand" }, [
-        el("div", { class: "logo" }, ["UP"]),
+        el("div", { class: "logo" }, ["USP"]),
         el("div", {}, [
-          el("div", { class: "brand-title" }, ["UP-planning"]),
-          el("div", { class: "brand-sub" }, ["Utvecklings- och Produktionsprocess"]),
+          el("div", { class: "brand-title" }, ["US-planning"]),
+          el("div", { class: "brand-sub" }, ["USP"]),
         ]),
       ]),
       el("div", { class: "tabs", id: "tabs" }),
@@ -656,7 +1011,7 @@
 
     const hero = el("div", { class: "hero" }, [
       el("div", { class: "hero-left" }, [
-        el("h1", { id: "heroTitle" }, ["Utveckling"]),
+        el("h1", { id: "heroTitle" }, ["Utvecklingsprocess"]),
         el("div", { id: "heroInline" }),
       ]),
       el("div", { class: "hero-actions", id: "heroActions" }),
@@ -675,8 +1030,7 @@
         ]),
         el("div", { class: "modal-body", id: "modalBody" }),
         el("div", { class: "modal-footer" }, [
-          el("button", { class: "btn", id: "modalCloseBtn2", type: "button" }, ["Stäng"]),
-        ]),
+          ]),
       ]),
     ]);
 
@@ -804,20 +1158,24 @@ menu.appendChild(item("Logout", doLogout));
   // -------------------------------
   
 function renderManageUsers(current) {
-    const wrap = el("div", {}, []);
-    const header = el("div", { style: "display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:12px;" });
+    const wrap = el("div", { class: "manage-users-wrap" }, []);
+    const header = el("div", { class: "manage-users-header" });
 
-    const title = el("div", { style: "font-weight:1000;" }, ["Users"]);
-    const newBtn = el("button", { class: "btn btn-primary", type: "button", onclick: (e) => { e?.preventDefault?.(); e?.stopPropagation?.(); openFormForUser(null); } }, ["New User"]);
+    const title = el("div", { class: "manage-users-title" }, ["Users"]);
+    const newBtn = el("button", { class: "btn btn-primary btn-small", type: "button", onclick: (e) => { e?.preventDefault?.(); e?.stopPropagation?.(); openFormForUser(null); } }, ["New User"]);
     header.appendChild(title);
     header.appendChild(newBtn);
 
-    const list = el("div", { style: "display:flex;flex-direction:column;gap:10px;" });
+    const list = el("div", { class: "manage-users-list" });
+
+    const backToManage = () => {
+      openModal({ title: "Manage user", sub: "Hantera användare", bodyNode: renderManageUsers(current) });
+    };
 
     function openFormForUser(userObjOrNull) {
       const existing = userObjOrNull || null;
       const body = renderForm(existing);
-      openModal({ title: existing ? "Edit user" : "New user", sub: existing ? (existing.username || "") : "", bodyNode: body });
+      openModal({ title: existing ? "Edit user" : "New user", sub: existing ? (existing.username || "") : "", bodyNode: body, onClose: backToManage, showFooterClose: false });
     }
 
     function renderList() {
@@ -825,19 +1183,17 @@ function renderManageUsers(current) {
       const users = getUsers();
 
       users.forEach((u) => {
-        const row = el("div", { style: "display:flex;align-items:center;",
-          style: "display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px;border:1px solid #e5e7eb;border-radius:12px;",
-        });
+        const row = el("div", { class: "manage-user-row" });
 
         const nameBtn = el("button", {
           type: "button",
-          class: "link-btn", style: "cursor:pointer;",
+          class: "link-btn manage-user-name",
           title: "Öppna",
           onclick: () => openFormForUser(u),
         }, [u.username || "(saknar namn)"]);
 
         const del = el("button", {
-          class: "icon-btn up-trash",
+          class: "icon-btn up-trash manage-user-delete",
           type: "button",
           title: "Ta bort användaren",
           onclick: () => {
@@ -897,7 +1253,6 @@ function renderManageUsers(current) {
 
       const actions = el("div", { style: "display:flex;gap:10px;justify-content:flex-end;margin-top:12px;flex-wrap:wrap;" });
       const saveBtn = el("button", { class: "btn btn-primary", type: "button" }, ["Save"]);
-      const cancelBtn = el("button", { class: "btn btn-secondary", type: "button" }, ["Cancel"]);
 
       saveBtn.addEventListener("click", () => {
         const username = (inUser.value || "").trim();
@@ -947,13 +1302,9 @@ function renderManageUsers(current) {
         }
 
         setUsers(users);
-        closeModal();
-        renderList();
+        backToManage();
       });
 
-      cancelBtn.addEventListener("click", () => closeModal());
-
-      actions.appendChild(cancelBtn);
       actions.appendChild(saveBtn);
 
       card.appendChild(grid);
@@ -970,53 +1321,160 @@ function renderManageUsers(current) {
   }
 
   
-  function renderManageRegisters(state) {
+    function renderManageRegisters(state) {
     ensureTodoCategories(state);
     ensureDevTypes(state);
 
-    const wrap = el("div", {}, []);
-    const top = el("div", { style: "display:flex;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap;" });
+    // Custom registers (admin-defined)
+    state.customRegisters = Array.isArray(state.customRegisters) ? state.customRegisters : [];
 
-    const regSel = el("select", { class: "input up-select", style: "max-width:220px;" }, [
+    const wrap = el("div", { class: "manage-reg-wrap" }, []);
+
+    // --- Top / toolbar ---
+    const top = el("div", { class: "reg-toolbar" });
+
+    // Dropdown
+    const regSel = el("select", { class: "input up-select reg-select" }, [
       el("option", { value: "kategori" }, ["Kategori"]),
       el("option", { value: "dev_type" }, ["Dev_type"]),
+      ...state.customRegisters.map((r) => el("option", { value: r.id }, [r.name || "(Namnlös)"])),
     ]);
 
-    const hint = el("div", { style: "font-size:12px;color:#6b7280;" }, [
-      "Kategori används i Tasks-filter. Dev_type används som dropdown för fältet Typ i Produkt.",
+    // Återställ senast valda register i admin
+    if (state.adminRegisterSelected && state.adminRegisterSelected !== regSel.value) {
+      const opt = Array.from(regSel.options || []).some(o => o.value === state.adminRegisterSelected);
+      if (opt) regSel.value = state.adminRegisterSelected;
+    }
+
+
+    // Actions (after dropdown)
+    const btnDeleteReg = el("button", { class: "btn btn-small", type: "button" }, ["Ta bort"]);
+    const btnNewReg = el("button", { class: "btn btn-primary btn-small", type: "button" }, ["Nytt register"]);
+    const actions = el("div", { class: "reg-toolbar-actions" }, [btnDeleteReg, btnNewReg]);
+
+    const hint = el("div", { class: "reg-hint" }, [
+      "Kategori används i Tasks-filter. Dev_type används som dropdown (P-typ) i Utvecklingsprocess och Säljprocess Ny produkt.",
     ]);
 
     top.appendChild(el("div", { class: "label", style: "margin:0;" }, ["Register"]));
     top.appendChild(regSel);
-    top.appendChild(hint);
+    top.appendChild(actions);
 
     const body = el("div", {});
 
+    function saveAndRerender() {
+      saveState(state);
+      renderActive();
+    }
+
+    function clearKategoriRegister() {
+      const ok = confirm('Ta bort hela registret "Kategori"? Alla tasks som använder kategorier sätts till "Allmänt".');
+      if (!ok) return;
+
+      // Töm managed list (reserved hanteras av ensureTodoCategories)
+      state.todo = state.todo || {};
+      state.todo.categories = [];
+
+      // Replace on tasks + archive
+      const fix = (t) => {
+        if (!t) return;
+        if ((t.category || "").toLowerCase() !== "privat") t.category = "Allmänt";
+      };
+      (state.todo.items || []).forEach(fix);
+      (state.todo.archive || []).forEach(fix);
+      state.todo.filter = "Alla";
+
+      ensureTodoCategories(state);
+      saveState(state);
+      // categories påverkar huvud-UI => full render
+      render(state);
+      // och re-render modalen
+      openModal({
+        title: "Register",
+        sub: "Hantera register",
+        bodyNode: renderManageRegisters(state),
+      });
+    }
+
+    function clearDevTypeRegister() {
+      const ok = confirm('Ta bort hela registret "Dev_type"? (Detta tömmer dropdownen P-typ.)');
+      if (!ok) return;
+      state.devTypes = [];
+      saveAndRerender();
+    }
+
+    function deleteCustomRegister(regId) {
+      const reg = state.customRegisters.find((r) => r.id === regId);
+      const name = reg?.name || "valt register";
+      const ok = confirm(`Ta bort registret "${name}"?`);
+      if (!ok) return;
+      state.customRegisters = state.customRegisters.filter((r) => r.id !== regId);
+      // hoppa tillbaka till kategori
+      state.adminRegisterSelected = "kategori";
+      regSel.value = "kategori";
+      saveAndRerender();
+    }
+
+    btnDeleteReg.addEventListener("click", () => {
+      const which = regSel.value;
+      if (which === "kategori") return clearKategoriRegister();
+      if (which === "dev_type") return clearDevTypeRegister();
+      return deleteCustomRegister(which);
+    });
+
+    btnNewReg.addEventListener("click", () => {
+      const name = prompt("Namn på nytt register:");
+      const n = (name || "").trim();
+      if (!n) return;
+
+      // unikhet (case-insensitive)
+      const low = n.toLowerCase();
+      if (["kategori", "dev_type"].includes(low)) {
+        alert("Det namnet är reserverat.");
+        return;
+      }
+      if (state.customRegisters.some((r) => (r.name || "").trim().toLowerCase() === low)) {
+        alert("Det registret finns redan.");
+        return;
+      }
+
+      const reg = { id: uid("reg"), name: n, items: [] };
+      state.customRegisters.push(reg);
+      saveState(state);
+
+      state.adminRegisterSelected = reg.id;
+      saveState(state);
+
+      openModal({
+        title: "Register",
+        sub: "Hantera register",
+        bodyNode: renderManageRegisters(state),
+      });
+    });
+
     function renderDevType() {
-      const list = el("div", { style: "display:flex;flex-direction:column;gap:10px;" });
+      const list = el("div", { class: "reg-list" });
       const items = getDevTypes(state);
 
       items.forEach((name) => {
-        const row = el("div", { style: "display:flex;align-items:center;gap:10px;" });
+        const row = el("div", { class: "reg-row" });
         const input = el("input", { class: "input", value: name });
-        const saveBtn = el("button", { class: "btn", type: "button" }, ["Spara"]);
-        const delBtn = el("button", { class: "btn", type: "button" }, ["Ta bort"]);
+        const saveBtn = el("button", { class: "btn btn-small", type: "button" }, ["Spara"]);
+        const delBtn = el("button", { class: "btn btn-small", type: "button" }, ["Ta bort"]);
 
         saveBtn.addEventListener("click", () => {
           const v = (input.value || "").trim();
           if (!v) return alert("Namn saknas.");
           state.devTypes = (state.devTypes || []).map((x) => (x === name ? v : x));
           state.devTypes = uniqStrings(state.devTypes);
-          saveState(state);
-          renderActive();
+          saveAndRerender();
         });
 
         delBtn.addEventListener("click", () => {
           const ok = confirm(`Ta bort "${name}"?`);
           if (!ok) return;
           state.devTypes = (state.devTypes || []).filter((x) => x !== name);
-          saveState(state);
-          renderActive();
+          saveAndRerender();
         });
 
         row.appendChild(input);
@@ -1025,17 +1483,16 @@ function renderManageUsers(current) {
         list.appendChild(row);
       });
 
-      const addRow = el("div", { style: "display:flex;align-items:center;gap:10px;margin-top:12px;" });
+      const addRow = el("div", { class: "reg-add-row" });
       const addIn = el("input", { class: "input", placeholder: "Ny dev_type..." });
-      const addBtn = el("button", { class: "btn btn-primary", type: "button" }, ["Lägg till"]);
+      const addBtn = el("button", { class: "btn btn-primary btn-small", type: "button" }, ["Lägg till"]);
 
       addBtn.addEventListener("click", () => {
         const v = (addIn.value || "").trim();
         if (!v) return;
         state.devTypes = uniqStrings([...(state.devTypes || []), v]);
         addIn.value = "";
-        saveState(state);
-        renderActive();
+        saveAndRerender();
       });
 
       addRow.appendChild(addIn);
@@ -1046,27 +1503,84 @@ function renderManageUsers(current) {
       body.appendChild(addRow);
     }
 
+    function renderCustomRegister(regId) {
+      const reg = state.customRegisters.find((r) => r.id === regId);
+      if (!reg) return body.appendChild(el("div", { style: "color:#6b7280;font-size:13px;" }, ["Hittar inte registret."]));
+
+      reg.items = Array.isArray(reg.items) ? reg.items : [];
+
+      const list = el("div", { class: "reg-list" });
+
+      reg.items.forEach((name) => {
+        const row = el("div", { class: "reg-row" });
+        const input = el("input", { class: "input", value: name });
+        const saveBtn = el("button", { class: "btn btn-small", type: "button" }, ["Spara"]);
+        const delBtn = el("button", { class: "btn btn-small", type: "button" }, ["Ta bort"]);
+
+        saveBtn.addEventListener("click", () => {
+          const v = (input.value || "").trim();
+          if (!v) return alert("Namn saknas.");
+          reg.items = uniqStrings(reg.items.map((x) => (x === name ? v : x)));
+          saveAndRerender();
+        });
+
+        delBtn.addEventListener("click", () => {
+          const ok = confirm(`Ta bort "${name}"?`);
+          if (!ok) return;
+          reg.items = reg.items.filter((x) => x !== name);
+          saveAndRerender();
+        });
+
+        row.appendChild(input);
+        row.appendChild(saveBtn);
+        row.appendChild(delBtn);
+        list.appendChild(row);
+      });
+
+      const addRow = el("div", { class: "reg-add-row" });
+      const addIn = el("input", { class: "input", placeholder: "Nytt värde..." });
+      const addBtn = el("button", { class: "btn btn-primary btn-small", type: "button" }, ["Lägg till"]);
+
+      addBtn.addEventListener("click", () => {
+        const v = (addIn.value || "").trim();
+        if (!v) return;
+        reg.items = uniqStrings([...(reg.items || []), v]);
+        addIn.value = "";
+        saveAndRerender();
+      });
+
+      addRow.appendChild(addIn);
+      addRow.appendChild(addBtn);
+
+      body.appendChild(el("div", { class: "label" }, [reg.name || "Register"]));
+      body.appendChild(list);
+      body.appendChild(addRow);
+    }
+
     function renderActive() {
       body.innerHTML = "";
       const which = regSel.value;
       if (which === "kategori") body.appendChild(renderManageCategories(state));
-      else renderDevType();
+      else if (which === "dev_type") renderDevType();
+      else renderCustomRegister(which);
     }
 
-    regSel.addEventListener("change", renderActive);
+    regSel.addEventListener("change", () => { state.adminRegisterSelected = regSel.value; saveState(state); renderActive(); });
 
     wrap.appendChild(top);
+    wrap.appendChild(hint);
     wrap.appendChild(body);
     renderActive();
     return wrap;
   }
+
 
 function renderManageCategories(state) {
     const wrap = el("div", {}, []);
     const header = el("div", { style: "display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:12px;" });
 
     const title = el("div", { style: "font-weight:1000;" }, ["Kategorier"]);
-    const newBtn = el("button", { class: "btn btn-primary", type: "button" }, ["Ny kategori"]);
+    const newBtn = el("button", { class: "btn btn-primary btn-small", type: "button" }, ["Ny kategori"]);
     header.appendChild(title);
     header.appendChild(newBtn);
 
@@ -1074,14 +1588,24 @@ function renderManageCategories(state) {
       'Dessa används i Tasks-kategori och i dropdown-filtret. "Alla" finns alltid med. "Privat" är en specialkategori och kan inte tas bort här.',
     ]);
 
-    const list = el("div", { style: "display:flex;flex-direction:column;gap:10px;" });
-    const formWrap = el("div", { style: "margin-top:12px;display:none;" });
+    const list = el("div", { class: "reg-list" });
 
-    let editingName = null;
+    function normalize(s) { return (s || "").toString().trim(); }
+    function isReserved(name) {
+      const low = (name || "").toString().trim().toLowerCase();
+      return low === "alla" || low === "privat";
+    }
 
     function refreshFromTasks() {
       ensureTodoCategories(state);
       saveState(state);
+    }
+
+    function rerenderEverything() {
+      // Categories affect tasks + filters, so a full render is safest.
+      ensureTodoCategories(state);
+      saveState(state);
+      render(state);
     }
 
     function renderList() {
@@ -1090,114 +1614,112 @@ function renderManageCategories(state) {
 
       const cats = getManagedTodoCategories(state);
 
-      cats.forEach((c) => {
-        const row = el("div", { style: "display:flex;align-items:center;",
-          style: "display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px;border:1px solid #e5e7eb;border-radius:12px;",
-        });
+      cats.forEach((name) => {
+        const row = el("div", { class: "reg-row" });
+        const input = el("input", { class: "input", value: name });
+        const saveBtn = el("button", { class: "btn btn-small", type: "button" }, ["Spara"]);
+        const delBtn = el("button", { class: "btn btn-small", type: "button" }, ["Ta bort"]);
 
-        const nameBtn = el("button", {
-          type: "button",
-          class: "link-btn", style: "cursor:pointer;",
-          title: "Ändra",
-          onclick: () => openForm(c),
-        }, [c]);
+        saveBtn.addEventListener("click", () => {
+          const v = normalize(input.value);
+          if (!v) return alert("Namn saknas.");
+          if (isReserved(v)) return alert('"' + v + '" är reserverat.');
+          const oldLow = name.toLowerCase();
+          const newLow = v.toLowerCase();
 
-        const del = el("button", {
-          class: "icon-btn up-trash",
-          type: "button",
-          title: "Ta bort kategori",
-          onclick: () => {
-            const ok = confirm(`Ta bort kategorin "${c}"? Alla tasks med denna kategori sätts till "Allmänt".`);
-            if (!ok) return;
+          // Prevent duplicates (case-insensitive) except when it is the same item
+          const others = getManagedTodoCategories(state).filter((x) => x.toLowerCase() !== oldLow);
+          if (others.map((x) => x.toLowerCase()).includes(newLow)) return alert("Den kategorin finns redan.");
 
-            // Remove from managed list
-            state.todo.categories = getManagedTodoCategories(state).filter((x) => x.toLowerCase() !== c.toLowerCase());
+          // Rename in managed list
+          state.todo = state.todo || {};
+          const current = getManagedTodoCategories(state);
+          state.todo.categories = current.map((x) => (x.toLowerCase() === oldLow ? v : x));
 
-            // Replace on tasks
-            const fix = (t) => {
-              if (!t) return;
-              if ((t.category || "").toLowerCase() === c.toLowerCase()) t.category = "Allmänt";
-            };
-            (state.todo.items || []).forEach(fix);
-            (state.todo.archive || []).forEach(fix);
-
-            if ((state.todo.filter || "").toLowerCase() === c.toLowerCase()) state.todo.filter = "Alla";
-
-            ensureTodoCategories(state);
-            saveState(state);
-            render(state);
-            if (editingName && editingName.toLowerCase() === c.toLowerCase()) closeForm();
-            renderList();
-          },
-        }, ["🗑️"]);
-
-        row.appendChild(nameBtn);
-        row.appendChild(del);
-        list.appendChild(row);
-      });
-    }
-
-    function openForm(existingNameOrNull) {
-      editingName = existingNameOrNull ? existingNameOrNull : null;
-      formWrap.style.display = "block";
-      renderForm(existingNameOrNull);
-    }
-    function closeForm() { editingName = null; formWrap.style.display = "none"; }
-
-    function renderForm(existingNameOrNull) {
-      formWrap.innerHTML = "";
-
-      const isEdit = !!existingNameOrNull;
-      const input = el("input", { class: "input", placeholder: "Kategori (t.ex. Frakt)", value: existingNameOrNull || "" });
-
-      const actions = el("div", { style: "display:flex;gap:10px;justify-content:flex-end;margin-top:10px;" }, []);
-      const cancel = el("button", { class: "btn", type: "button", onclick: () => closeForm() }, ["Avbryt"]);
-      const save = el("button", { class: "btn btn-primary", type: "button" }, ["Spara"]);
-
-      save.addEventListener("click", () => {
-        const v = (input.value || "").toString().trim();
-        if (!v) { alert("Ange ett namn."); return; }
-        const low = v.toLowerCase();
-        if (low === "alla") { alert('"Alla" är reserverat.'); return; }
-        if (low === "privat") { alert('"Privat" är en specialkategori.'); return; }
-
-        const cats = getManagedTodoCategories(state);
-        if (!isEdit) {
-          if (cats.map((x) => x.toLowerCase()).includes(low)) { alert("Den kategorin finns redan."); return; }
-          state.todo.categories = uniqStrings([...cats, v]);
-        } else {
-          const oldLow = existingNameOrNull.toLowerCase();
-          // rename in list
-          state.todo.categories = cats.map((x) => (x.toLowerCase() === oldLow ? v : x));
-          // rename in tasks
+          // Rename on tasks
           const ren = (t) => {
             if (!t) return;
             if ((t.category || "").toLowerCase() === oldLow) t.category = v;
           };
           (state.todo.items || []).forEach(ren);
           (state.todo.archive || []).forEach(ren);
+
+          // Rename active filter if needed
           if ((state.todo.filter || "").toLowerCase() === oldLow) state.todo.filter = v;
-        }
 
-        ensureTodoCategories(state);
-        saveState(state);
-        render(state);
-        closeForm();
-        renderList();
+          rerenderEverything();
+        });
+
+        delBtn.addEventListener("click", () => {
+          const low = name.toLowerCase();
+          if (low === "privat") return alert('"Privat" kan inte tas bort här.');
+          const ok = confirm(`Ta bort kategorin "${name}"? Alla tasks med denna kategori sätts till "Allmänt".`);
+          if (!ok) return;
+
+          state.todo = state.todo || {};
+
+          // Remove from managed list
+          state.todo.categories = getManagedTodoCategories(state).filter((x) => x.toLowerCase() !== low);
+
+          // Replace on tasks
+          const fix = (t) => {
+            if (!t) return;
+            if ((t.category || "").toLowerCase() === low) t.category = "Allmänt";
+          };
+          (state.todo.items || []).forEach(fix);
+          (state.todo.archive || []).forEach(fix);
+
+          if ((state.todo.filter || "").toLowerCase() === low) state.todo.filter = "Alla";
+
+          rerenderEverything();
+        });
+
+        row.appendChild(input);
+        row.appendChild(saveBtn);
+        row.appendChild(delBtn);
+        list.appendChild(row);
       });
-
-      actions.appendChild(cancel);
-      actions.appendChild(save);
-
-      formWrap.appendChild(el("div", { class: "label" }, [isEdit ? "Ändra kategori" : "Ny kategori"]));
-      formWrap.appendChild(input);
-      formWrap.appendChild(actions);
     }
+
+    const addRow = el("div", { class: "reg-add-row" });
+    const addIn = el("input", { class: "input", placeholder: "Ny kategori..." });
+    const addBtn = el("button", { class: "btn btn-primary btn-small", type: "button" }, ["Lägg till"]);
+
+    function addCategoryFromInput() {
+      const v = normalize(addIn.value);
+      if (!v) return;
+      if (isReserved(v)) return alert('"' + v + '" är reserverat.');
+      const low = v.toLowerCase();
+
+      const cats = getManagedTodoCategories(state);
+      if (cats.map((x) => x.toLowerCase()).includes(low)) return alert("Den kategorin finns redan.");
+
+      state.todo = state.todo || {};
+      state.todo.categories = uniqStrings([...cats, v]);
+
+      addIn.value = "";
+      rerenderEverything();
+    }
+
+    addBtn.addEventListener("click", addCategoryFromInput);
+    addIn.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        addCategoryFromInput();
+      }
+    });
+
+    newBtn.addEventListener("click", () => {
+      addIn.focus();
+    });
+
+    addRow.appendChild(addIn);
+    addRow.appendChild(addBtn);
 
     wrap.appendChild(header);
     wrap.appendChild(hint);
     wrap.appendChild(list);
-    wrap.appendChild(formWrap);
+    wrap.appendChild(addRow);
 
     renderList();
     return wrap;
@@ -1205,6 +1727,7 @@ function renderManageCategories(state) {
 
   // -------------------------------
   // Login screen
+
   // -------------------------------
   function mountLogin(app) {
     app.innerHTML = "";
@@ -1260,7 +1783,7 @@ function renderManageCategories(state) {
   }
 
   // -------------------------------
-  // Utveckling (admin schema)
+  // Utvecklingsprocess (admin schema)
   // -------------------------------
   function allTasks(activity) {
     const tasks = Array.isArray(activity?.tasks) ? activity.tasks : [];
@@ -1290,7 +1813,7 @@ function renderManageCategories(state) {
     const newBtn = el("button", { class: "btn btn-primary", type: "button" }, ["Ny aktivitet"]);
     header.appendChild(newBtn);
 
-    const list = el("div", { style: "display:flex;flex-direction:column;gap:10px;" });
+    const list = el("div", { class: "reg-list" });
 
     function renderList() {
       list.innerHTML = "";
@@ -1366,7 +1889,7 @@ function renderManageCategories(state) {
     openModal({ title: "Definiera utvecklingstabell", sub: "Admin: aktiviteter", bodyNode: wrap });
   }
 
-  // Admin view for Utveckling (inline, not using Ny utveckling)
+  // Admin view for Utvecklingsprocess (inline, not using Ny utveckling)
   function renderDevAdminView(state) {
     const view = document.getElementById("view");
     view.innerHTML = "";
@@ -1383,7 +1906,7 @@ function renderManageCategories(state) {
     const newBtn = el("button", { class: "btn btn-primary", type: "button" }, ["Ny aktivitet"]);
     header.appendChild(newBtn);
 
-    const list = el("div", { style: "display:flex;flex-direction:column;gap:10px;" });
+    const list = el("div", { class: "reg-list" });
 
     function renderList() {
 
@@ -1394,6 +1917,8 @@ function renderManageCategories(state) {
         const tmp = acts[idx];
         acts[idx] = acts[j];
         acts[j] = tmp;
+        // Sätt/uppdatera ordning så att USER-tabeller följer Admin (även efter omstart)
+        acts.forEach((a, i) => { if (a) a.order = i + 1; });
         saveState(state);
         render(state);
       }
@@ -1477,7 +2002,7 @@ function renderManageCategories(state) {
     view.appendChild(wrap);
   }
 
-  // Admin view for Produkt (samma admin-UI som Utveckling)
+  // Admin view for Produkt (samma admin-UI som Utvecklingsprocess)
   function renderProductAdminView(state) {
     const view = document.getElementById("view");
     view.innerHTML = "";
@@ -1488,13 +2013,13 @@ function renderManageCategories(state) {
     const wrap = el("div", {}, []);
 
     const header = el("div", { style: "display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:12px;flex-wrap:wrap;" }, [
-      el("div", { style: "font-weight:1000;font-size:16px;" }, ["Definiera produkttabell"]),
+      el("div", { style: "font-weight:1000;font-size:16px;" }, ["Definiera säljtabell"]),
     ]);
 
     const newBtn = el("button", { class: "btn btn-primary", type: "button" }, ["Ny aktivitet"]);
     header.appendChild(newBtn);
 
-    const list = el("div", { style: "display:flex;flex-direction:column;gap:10px;" });
+    const list = el("div", { class: "reg-list" });
 
     function renderList() {
 
@@ -1505,6 +2030,8 @@ function renderManageCategories(state) {
         const tmp = acts[idx];
         acts[idx] = acts[j];
         acts[j] = tmp;
+        // Sätt/uppdatera ordning så att USER-tabeller följer Admin (även efter omstart)
+        acts.forEach((a, i) => { if (a) a.order = i + 1; });
         saveState(state);
         render(state);
       }
@@ -1588,7 +2115,7 @@ function renderManageCategories(state) {
     view.appendChild(wrap);
   }
 
-// Admin view for Produkt (samma admin-UI som Utveckling)
+// Admin view for Produkt (samma admin-UI som Utvecklingsprocess)
   
 
   function openNewActivityForm(state, onAfterSave) {
@@ -1599,7 +2126,7 @@ function renderManageCategories(state) {
       el("div", { class: "label" }, ["Ny aktivitet"]),
       el("div", { style: "display:grid;grid-template-columns:1fr 160px;gap:10px;align-items:end;" }, [
         el("div", {}, [el("div", { class: "label" }, ["Namn"]), nameIn]),
-        el("div", {}, [el("div", { class: "label" }, ["Typ"]), typeSel]),
+        el("div", {}, [el("div", { class: "label" }, ["Akt-typ"]), typeSel]),
       ]),
     ]);
 
@@ -1635,10 +2162,10 @@ function renderManageCategories(state) {
     const typeSel = el("select", { class: "input" }, DEV_ACTIVITY_TYPES.map((t) => el("option", { value: t }, [t])));
 
     const form = el("div", {}, [
-      el("div", { class: "label" }, ["Ny produkt-aktivitet"]),
+      el("div", { class: "label" }, ["Ny sälj-aktivitet"]),
       el("div", { style: "display:grid;grid-template-columns:1fr 160px;gap:10px;align-items:end;" }, [
         el("div", {}, [el("div", { class: "label" }, ["Namn"]), nameIn]),
-        el("div", {}, [el("div", { class: "label" }, ["Typ"]), typeSel]),
+        el("div", {}, [el("div", { class: "label" }, ["Akt-typ"]), typeSel]),
       ]),
     ]);
 
@@ -1665,7 +2192,7 @@ function renderManageCategories(state) {
       onAfterSave && onAfterSave();
       });
 
-    openModal({ title: "Ny produkt-aktivitet", sub: "Admin", bodyNode: el("div", {}, [form, actions]) });
+    openModal({ title: "Ny sälj-aktivitet", sub: "Admin", bodyNode: el("div", {}, [form, actions]) });
   }
 
 
@@ -1683,7 +2210,7 @@ function renderManageCategories(state) {
     const newBtn = el("button", { class: "btn btn-primary", type: "button" }, ["New Task"]);
     header.appendChild(newBtn);
 
-    const table = el("table", { class: "table" });
+    const table = el("table", { class: "table dev-table" });
     const thead = el("thead", {}, [
       el("tr", {}, [
         el("th", {}, [""]),
@@ -1864,32 +2391,46 @@ function renderManageCategories(state) {
   }
 
   // -------------------------------
-  // Utveckling (user table)
+  // Utvecklingsprocess (user table)
   // -------------------------------
   function ensureDevEntryCell(entry, activity) {
-    entry.fields = entry.fields || {};
-    if (!entry.fields[activity.id]) {
-      if (activity.type === "steg") entry.fields[activity.id] = { tasksData: {} };
-      else entry.fields[activity.id] = { value: "" };
-    } else {
-      // normalize
-      const cell = entry.fields[activity.id];
-      if (activity.type === "steg") {
-        if (!cell.tasksData || typeof cell.tasksData !== "object") {
-        // migrate old shape if present
-        const old = (cell.tasksData && typeof cell.tasksData === "object") ? cell.tasksData : {};
-        cell.tasksData = {};
-        Object.keys(old).forEach((tid) => {
-          cell.tasksData[tid] = { done: !!old[tid], date: "", notes: [] };
-        });
-        delete cell.tasksData;
-      }
-      } else {
-        if (!("value" in cell)) cell.value = "";
-      }
-    }
-    return entry.fields[activity.id];
+  entry.fields = entry.fields || {};
+
+  let cell = entry.fields[activity.id];
+
+  // Create if missing
+  if (!cell || typeof cell !== "object") {
+    cell = entry.fields[activity.id] = (activity.type === "status") ? { tasksData: {} } : { value: "" };
   }
+
+  // Normalize per type
+  if (activity.type === "status") {
+    cell.tasksData = (cell.tasksData && typeof cell.tasksData === "object") ? cell.tasksData : {};
+
+    // Migrate / normalize each task-data record
+    Object.keys(cell.tasksData).forEach((tid) => {
+      const td = cell.tasksData[tid];
+      if (td && typeof td === "object") {
+        cell.tasksData[tid] = {
+          done: !!td.done,
+          date: td.date || "",
+          notes: Array.isArray(td.notes) ? td.notes : [],
+        };
+      } else {
+        // old shape: boolean done
+        cell.tasksData[tid] = { done: !!td, date: "", notes: [] };
+      }
+    });
+  } else {
+    if (!("value" in cell)) cell.value = "";
+    // for vecka-kalender we also use cell.date (keep as-is)
+  }
+
+  // Notess live on the activity-cell (per entry/row + activity)
+  cell.comments = Array.isArray(cell.comments) ? cell.comments : [];
+
+  return cell;
+}
 
   function countDoneSteps(entry, activity) {
     const tasks = allTasks(activity);
@@ -2059,14 +2600,21 @@ function renderManageCategories(state) {
     view.innerHTML = "";
 
     const user = currentUser();
-    const acts = state.devSchema.activities.slice();
-
-    // Sort activities by createdAt (stable)
-    acts.sort((a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0));
+    ensureDevTypes(state);
+    const devTypes = getDevTypes(state);
+        const acts = state.devSchema.activities.slice();
+    // Normalisera legacy-typer
+    state.devSchema.activities.forEach((a) => { if (a) a.type = normalizeActivityType(a.type); });
+    // Respektera admin-ordningen: använd order/sortOrder/position om den finns, annars behåll array-ordningen.
+    const hasOrder = acts.some((a) => a?.order != null || a?.sortOrder != null || a?.position != null);
+    if (hasOrder) {
+      const ord = (x) => (x?.order ?? x?.sortOrder ?? x?.position ?? 0);
+      acts.sort((a, b) => ord(a) - ord(b) || (a.createdAt ?? 0) - (b.createdAt ?? 0));
+    }
 
     const cols = [
       { key: "name", label: "Namn", type: "passive" },
-      { key: "__type__", label: "Typ", type: "type" },
+      { key: "__type__", label: "P-typ", type: "type" },
       ...acts.map((a) => ({ key: a.id, label: a.name, type: a.type, activity: a })),
     ];
 
@@ -2101,93 +2649,192 @@ const tbody = el("tbody");
         }),
       ]));
 
-      // typ
+      // typ (dev_type register)
       tr.appendChild(el("td", {}, [
-        el("div", { style: "font-weight:800;" }, [
-          (entry.type || "").toString().toLowerCase() === "produkt" ? "Produkt" : ((entry.type || "").toString().toLowerCase() === "paketering" ? "Paketering" : (entry.type || ""))
-        ])
+        el("select", {
+          class: "select ptype-select",
+          value: entry.type ?? "",
+          onchange: (e) => {
+            entry.type = e.target.value || "";
+            saveState(state);
+          },
+        }, [
+          el("option", { value: "" }, ["—"]),
+          ...devTypes.map((t) => el("option", { value: t }, [t])),
+        ]),
       ]));
 
       // dynamic activity cols
-      acts.forEach((a) => {
-        const td = el("td");
-        const cell = ensureDevEntryCell(entry, a);
+acts.forEach((a) => {
+  const td = el("td");
+  const cell = ensureDevEntryCell(entry, a);
 
-        if (a.type === "text") {
-          td.appendChild(el("input", {
-            class: "input",
-            value: cell.value ?? "",
-            placeholder: "",
-            oninput: (e) => { cell.value = e.target.value; saveState(state); },
-          }));
-        } else if (a.type === "veckokalender") {
-          // Visa kalender (date picker) men presentera vecka i fältet
-          const wrap = el("div", { style: "position:relative;width:100%;min-width:120px;" });
-          const shown = el("input", {
-            class: "input",
-            type: "text",
-            value: cell.value ?? "",
-            placeholder: "Välj vecka",
-            readonly: true,
-            style: "padding-right:12px;",
-          });
-          const picker = el("input", {
-            type: "date",
-            value: cell.date || "",
-            style: "position:absolute;inset:0;opacity:0;cursor:pointer;",
-          });
-          picker.addEventListener("change", (e) => {
-            const v = e.target.value || "";
-            cell.date = v;
-            if (!v) cell.value = "";
-            else cell.value = isoWeekKey(new Date(v + "T00:00:00"));
-            saveState(state);
-            render(state);
-          });
-          wrap.appendChild(shown);
-          wrap.appendChild(picker);
-          td.appendChild(wrap);
-        } else if (a.type === "kalender") {
-          td.appendChild(el("input", {
-            class: "input",
-            type: "date",
-            value: cell.value ?? "",
-            onchange: (e) => { cell.value = e.target.value; saveState(state); render(state); },
-          }));
-        } else if (a.type === "steg") {
-          const tasks = allTasks(a);
-          const steps = tasks.length;
-          const doneCount = countDoneSteps(entry, a);
+  // Normalize
+  cell.comments = Array.isArray(cell.comments) ? cell.comments : [];
+  if (!("status" in cell)) cell.status = null;
+  if (!("ownerInitials" in cell)) cell.ownerInitials = "";
 
-          td.appendChild(el("button", {
-            type: "button",
-            class: "pill up-active-cell",
-            title: "Öppna tasks",
-            onclick: () => openUserTasksModal(state, entry, a),
-            style: "display:flex;align-items:center;gap:10px;width:100%;justify-content:flex-start;",
-          }, [
-            progressNode(doneCount, steps),
-            el("span", { style: "font-weight:900;" }, ["Tasks"]),
-          ]));
-        }
+  // Main editor/control for this activity (value)
+  let valueNode = null;
 
-        tr.appendChild(td);
-      });
+  const at = String(a.type || "").toLowerCase().trim();
 
-      // row delete (trash)
+  if (at === "text") {
+    valueNode = el("input", {
+      class: "act-value-input",
+      value: cell.value ?? "",
+      placeholder: "",
+      oninput: (e) => { cell.value = e.target.value; saveState(state); },
+    });
+
+  } else if (at === "veckonummer" || at === "weeknumber" || at === "veckokalender" || at === "weekcalendar" || at === "veckokalendar") {
+    // Week picker: store ISO week key (YYYY-WNN) and show as "vNN"
+    const wrap = el("div", { class: "act-date-wrap" });
+
+    const wk = (cell.value || "").toString().trim();
+    const mm = /^(\d{4})-W(\d{2})$/.exec(wk);
+    const shownTxt = mm ? `v${mm[2]}` : (wk ? wk : "---");
+
+    const shown = el("div", { class: "act-value act-date-display", title: wk }, [shownTxt]);
+
+    // Set picker value from stored date (preferred) or from week key range start
+    let pickVal = (cell.date || "").toString();
+    if (!pickVal && mm) {
+      const r = weekRangeFromKey(wk);
+      if (r && r.start) pickVal = new Date(r.start).toISOString().slice(0, 10);
+    }
+
+    const picker = el("input", {
+      type: "date",
+      value: pickVal,
+      class: "act-date-picker",
+    });
+
+    shown.addEventListener("click", () => {
+      if (typeof picker.showPicker === "function") picker.showPicker();
+      else { picker.focus(); picker.click(); }
+    });
+
+    // Make the whole date field area clickable (not just the text)
+    wrap.addEventListener("click", (e) => {
+      // ignore direct clicks on the hidden input (if it ever receives pointer events)
+      if (e.target === picker) return;
+      if (typeof picker.showPicker === "function") picker.showPicker();
+      else { picker.focus(); picker.click(); }
+    });
+
+    picker.addEventListener("change", (e) => {
+      const v = e.target.value || "";
+      cell.date = v;
+      if (!v) cell.value = "";
+      else cell.value = isoWeekKey(new Date(v + "T00:00:00"));
+      saveState(state);
+      render(state);
+    });
+
+    wrap.appendChild(shown);
+    wrap.appendChild(picker);
+    valueNode = wrap;
+
+  } else if (at === "date" || at === "kalender") {
+    // Date field: click on display to open native picker
+    const wrap = el("div", { class: "act-date-wrap" });
+    const shown = el("div", { class: "act-value act-date-display", title: cell.value ?? "" }, [cell.value ? cell.value : "-- -- --"]);
+    const picker = el("input", {
+      type: "date",
+      value: cell.value ?? "",
+      class: "act-date-picker",
+    });
+
+    shown.addEventListener("click", () => {
+      if (typeof picker.showPicker === "function") picker.showPicker();
+      else { picker.focus(); picker.click(); }
+    });
+
+    picker.addEventListener("change", (e) => {
+      cell.value = e.target.value || "";
+      saveState(state);
+      render(state);
+    });
+    wrap.appendChild(shown);
+    wrap.appendChild(picker);
+    valueNode = wrap;
+
+  } else if (at === "status" || at === "steg") {
+    // Status-only activity
+    valueNode = el("div", { class: "act-value act-status-only" }, [""]);
+  } else {
+    valueNode = el("div", { class: "act-value" }, [cell.value ?? ""]);
+  }
+
+  // Build unified activity field (brick)
+  const statusClass = cell.status === "green" ? "status-green" : (cell.status === "yellow" ? "status-yellow" : (cell.status === "red" ? "status-red" : ""));
+  const field = el("div", { class: `act-field ${statusClass} act-type-${at || "unknown"}` });
+
+  const statusCorner = el("div", {
+    class: "act-status-corner",
+    title: "Ändra status",
+    onclick: () => {
+      cell.status = nextActivityStatus(cell.status);
+      saveState(state);
+      render(state);
+    },
+  });
+
+  const ownerTxt = ((cell.ownerInitials || "").toUpperCase() || "--").slice(0, 2);
+  const ownerBtn = el("span", {
+    class: `owner-badge ${cell.comments.length > 0 ? "has-notes" : ""}`,
+    title: cell.comments.length ? `Notes (${cell.comments.length})` : "Notes",
+    onclick: () => openActivityNotesModal(state, entry, a, user),
+    oncontextmenu: (e) => {
+      e.preventDefault();
+      openOwnerPickerModal(state, cell);
+    },
+  }, [ownerTxt]);
+
+  const valueWrap = el("div", { style: "flex:1;min-width:0;" }, [valueNode]);
+
+  // Make text fields easier to click: focus input when clicking the brick/value area
+  if (at === "text" && valueNode && typeof valueNode.focus === "function") {
+    field.style.cursor = "text";
+    const focusInput = () => { try { valueNode.focus(); } catch(_) {} };
+    valueWrap.addEventListener("click", (e) => {
+      // don't steal click from the input itself
+      if (e.target === valueNode) return;
+      focusInput();
+    });
+    field.addEventListener("click", (e) => {
+      // ignore clicks on status corner / owner badge
+      const t = e.target;
+      if (t === statusCorner || t === ownerBtn) return;
+      if (t && t.closest && (t.closest(".act-status-corner") || t.closest(".owner-badge"))) return;
+      focusInput();
+    });
+  }
+
+  field.appendChild(statusCorner);
+  field.appendChild(valueWrap);
+  field.appendChild(ownerBtn);
+
+  td.appendChild(field);
+  tr.appendChild(td);
+});
+      // Actions (Done / Ta bort)
       tr.appendChild(el("td", {}, [
-        el("button", {
-          class: "icon-btn up-trash",
-          type: "button",
-          title: "Ta bort",
-          onclick: () => {
+        makeRowActionMenu({
+          onDone: () => {
+            const ok = confirm("Markera som DONE och flytta till Archive?");
+            if (!ok) return;
+            archiveDevEntry(state, entry);
+          },
+          onDelete: () => {
             const ok = confirm("Ta bort raden? Detta går inte att ångra.");
             if (!ok) return;
             state.devEntries = state.devEntries.filter((x) => x.id !== entry.id);
             saveState(state);
             render(state);
-          },
-        }, ["🗑️"]),
+          }
+        })
       ]));
 
       tbody.appendChild(tr);
@@ -2214,12 +2861,25 @@ const tbody = el("tbody");
   function openNewDevEntryForm(state) {
     const nameIn = el("input", { class: "input", placeholder: "Namn" });
 
-    const typeSel = el("select", { class: "input" }, [
-      el("option", { value: "produkt" }, ["Produkt"]),
-      el("option", { value: "paketering" }, ["Paketering"]),
-    ]);
+    // Typ: ska spegla admin-definierade Settings → Register → dev_type (state.devTypes)
+    ensureDevTypes(state);
+    const devTypes = getDevTypes(state);
 
-    const actions = el("div", { style: "display:flex;gap:10px;justify-content:flex-end;margin-top:12px;" });
+    const typeSel = el("select", { class: "input ptype-select" }, []);
+
+    // Default = inget valt
+    const placeholderOpt = el(
+      "option",
+      { value: "", selected: true, disabled: devTypes.length === 0 },
+      [devTypes.length === 0 ? "Inga typer definierade" : "Välj typ..."]
+    );
+    typeSel.appendChild(placeholderOpt);
+
+    // Lista alla dev_type (namn)
+    devTypes.forEach((t) => {
+      typeSel.appendChild(el("option", { value: t }, [t]));
+    });
+const actions = el("div", { style: "display:flex;gap:10px;justify-content:flex-end;margin-top:12px;" });
     const saveBtn = el("button", { class: "btn btn-primary", type: "button" }, ["Save"]);
     const cancelBtn = el("button", { class: "btn btn-secondary", type: "button" }, ["Cancel"]);
     actions.appendChild(cancelBtn);
@@ -2248,7 +2908,7 @@ const tbody = el("tbody");
     const body = el("div", {}, [
       el("div", { class: "label" }, ["Ny utveckling"]),
       el("div", {}, [el("div", { class: "label" }, ["Namn"]), nameIn]),
-      el("div", {}, [el("div", { class: "label" }, ["Typ"]), typeSel]),
+      el("div", {}, [el("div", { class: "label" }, ["P-typ"]), typeSel]),
       actions,
     ]);
 
@@ -2266,7 +2926,7 @@ const tbody = el("tbody");
   }
 
   function openProductActiveModal() {
-    openModal({ title: "Produkt", sub: "Aktiv aktivitet (klickbar)", bodyNode: renderPlaceholderModal() });
+    openModal({ title: "Säljprocess Ny produkt", sub: "Aktiv aktivitet (klickbar)", bodyNode: renderPlaceholderModal() });
   }
 
   
@@ -2279,24 +2939,30 @@ function renderProductTable(state) {
     ensureDevTypes(state);
     const devTypes = getDevTypes(state);
     const acts = (state.productSchema?.activities || []).slice();
-    acts.sort((a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0));
-
-    // Produkt: kolumner byggs ENDAST av admin-definierade aktiviteter
-    const baseCols = acts.map((a) => ({ key: a.id, label: a.name, type: a.type, activity: a }));
-
-    // Visa Typ-kolumnen direkt efter kolumnen "Namn" (om den finns)
-    const cols = [];
-    let insertedType = false;
-    baseCols.forEach((c) => {
-      cols.push(c);
-      if (!insertedType && String(c.label || "").trim().toLowerCase() === "namn") {
-        cols.push({ key: "__type__", label: "Typ", type: "dev_type" });
-        insertedType = true;
-      }
-    });
-    if (!insertedType) cols.unshift({ key: "__type__", label: "Typ", type: "dev_type" });
-
+    // Normalize legacy activity types
+    state.productSchema.activities.forEach((a) => { if (a && a.type === "kalender") a.type = "date"; });
+    // Viktigt: respektera admin-ordningen från "Definiera produkttabell".
+    // Om admin sparar en explicit ordning (order/sortOrder/position) använder vi den, annars behåller vi array-ordningen.
+    const hasOrder = acts.some((a) => a?.order != null || a?.sortOrder != null || a?.position != null);
+    if (hasOrder) {
+      const ord = (x) => (x?.order ?? x?.sortOrder ?? x?.position ?? 0);
+      acts.sort((a, b) => ord(a) - ord(b));
+    }
+// Produkt: fasta kolumner först (Namn + Typ/dev_type), därefter admin-definierade aktiviteter
+    const cols = [
+      { key: "name", label: "Namn", type: "passive" },
+      { key: "__type__", label: "P-typ", type: "type" },
+      ...acts.map((a) => ({ key: a.id, label: a.name, type: a.type, activity: a })),
+    ];
     const rows = state.productRows || [];
+
+    if (!acts.length) {
+      view.appendChild(el("div", { style: "padding:12px;border:1px dashed #d1d5db;border-radius:12px;color:#6b7280;margin-bottom:12px;" }, [
+        isAdmin(user)
+          ? "Inga säljaktiviteter definierade. Klicka på “Definiera produkttabell” för att lägga till kolumner."
+          : "Inga säljaktiviteter definierade ännu. Be admin definiera säljtabellen.",
+      ]));
+    }
 
     const table = el("table", { class: "table" });
     const thead = el("thead", {}, [
@@ -2311,97 +2977,182 @@ const tbody = el("tbody");
       row.fields = row.fields || {};
       const tr = el("tr");
 
-      cols.forEach((c) => {
-        if (c.key === "__type__") {
-          row.type = row.type || "";
-          const typeSel = el("select", { class: "input up-select" }, [
-            el("option", { value: "" }, ["-"]),
-            ...devTypes.map((t) => el("option", { value: t }, [t])),
-          ]);
-          typeSel.value = row.type || "";
-          typeSel.addEventListener("change", (e) => { row.type = e.target.value; saveState(state); });
-          tr.appendChild(el("td", { style: "min-width:140px;" }, [typeSel]));
-          return;
-        }
+      // Namn (fast)
+      tr.appendChild(el("td", {}, [
+        el("input", {
+          class: "input",
+          value: row.name ?? "",
+          placeholder: "Skriv namn…",
+          oninput: (e) => { row.name = e.target.value; saveState(state); },
+        }),
+      ]));
 
+      // Typ (fast, dev_type)
+      tr.appendChild(el("td", {}, [
+        el("select", {
+          class: "select ptype-select",
+          value: row.type ?? "",
+          onchange: (e) => { row.type = e.target.value || ""; saveState(state); },
+        }, [
+          el("option", { value: "" }, ["—"]),
+          ...devTypes.map((t) => el("option", { value: t }, [t])),
+        ]),
+      ]));
+
+      // Aktivitet-kolumner
+      acts.forEach((a) => {
         const td = el("td");
-        const a = c.activity;
         const cell = ensureDevEntryCell(row, a);
 
-        if (a.type === "text") {
-          td.appendChild(el("input", {
-            class: "input",
-            value: cell.value ?? "",
-            oninput: (e) => { cell.value = e.target.value; saveState(state); },
-          }));
-        } else if (a.type === "veckokalender") {
-          // Visa kalender (date picker) men presentera vecka i fältet
-          const wrap = el("div", { style: "position:relative;width:100%;min-width:120px;" });
-          const shown = el("input", {
-            class: "input",
-            type: "text",
-            value: cell.value ?? "",
-            placeholder: "Välj vecka",
-            readonly: true,
-            style: "padding-right:12px;",
-          });
-          const picker = el("input", {
-            type: "date",
-            value: cell.date || "",
-            style: "position:absolute;inset:0;opacity:0;cursor:pointer;",
-          });
-          picker.addEventListener("change", (e) => {
-            const v = e.target.value || "";
-            cell.date = v;
-            if (!v) cell.value = "";
-            else cell.value = isoWeekKey(new Date(v + "T00:00:00"));
-            saveState(state);
-            render(state);
-          });
-          wrap.appendChild(shown);
-          wrap.appendChild(picker);
-          td.appendChild(wrap);
-        } else if (a.type === "kalender") {
-          td.appendChild(el("input", {
-            class: "input",
-            type: "date",
-            value: cell.value ?? "",
-            onchange: (e) => { cell.value = e.target.value; saveState(state); render(state); },
-          }));
-        } else if (a.type === "steg") {
-          const tasks = allTasks(a);
-          const steps = tasks.length;
-          const doneCount = countDoneSteps(row, a);
+  // Normalize
+  cell.comments = Array.isArray(cell.comments) ? cell.comments : [];
+  if (!("status" in cell)) cell.status = null;
+  if (!("ownerInitials" in cell)) cell.ownerInitials = "";
 
-          td.appendChild(el("button", {
-            type: "button",
-            class: "pill up-active-cell",
-            title: "Öppna tasks",
-            onclick: () => openUserTasksModal(state, row, a),
-            style: "display:flex;align-items:center;gap:10px;width:100%;justify-content:flex-start;",
-          }, [
-            progressNode(doneCount, steps),
-            el("span", { style: "font-weight:900;" }, ["Tasks"]),
-          ]));
-        }
+  // Main editor/control for this activity (value)
+  let valueNode = null;
 
-        tr.appendChild(td);
+  const at = String(a.type || "").toLowerCase().trim();
+
+  if (at === "text") {
+    valueNode = el("input", {
+      class: "act-value-input",
+      value: cell.value ?? "",
+      placeholder: "",
+      oninput: (e) => { cell.value = e.target.value; saveState(state); },
+    });
+  } else if (at === "veckokalender") {
+    // Week picker: store ISO week key (YYYY-WNN) and show as "vNN". Default: ---
+    const wrap = el("div", { class: "act-date-wrap" });
+
+    const wk = (cell.value || "").toString().trim();
+    const mm = /^(\d{4})-W(\d{2})$/.exec(wk);
+    const shownTxt = mm ? `v${mm[2]}` : (wk ? wk : "---");
+
+    const shown = el("div", { class: "act-value act-date-display", title: wk }, [shownTxt]);
+
+    // picker value comes from cell.date if present
+    const picker = el("input", {
+      type: "date",
+      value: (cell.date || "").toString(),
+      class: "act-date-picker",
+    });
+
+    shown.addEventListener("click", () => {
+      if (typeof picker.showPicker === "function") picker.showPicker();
+      else { picker.focus(); picker.click(); }
+    });
+
+    picker.addEventListener("change", (e) => {
+      const v = e.target.value || "";
+      cell.date = v;
+      if (!v) cell.value = "";
+      else cell.value = isoWeekKey(new Date(v + "T00:00:00"));
+      saveState(state);
+      render(state);
+    });
+
+    wrap.appendChild(shown);
+    wrap.appendChild(picker);
+    valueNode = wrap;
+  } else if (at === "date" || at === "kalender") {
+    // Date field: click on display to open native picker
+    const wrap = el("div", { class: "act-date-wrap" });
+    const shown = el("div", { class: "act-value act-date-display", title: cell.value ?? "" }, [cell.value ? cell.value : "-- -- --"]);
+    const picker = el("input", {
+      type: "date",
+      value: cell.value ?? "",
+      class: "act-date-picker",
+    });
+
+    shown.addEventListener("click", () => {
+      if (typeof picker.showPicker === "function") picker.showPicker();
+      else { picker.focus(); picker.click(); }
+    });
+    picker.addEventListener("change", (e) => {
+      cell.value = e.target.value || "";
+      saveState(state);
+      render(state);
+    });
+    wrap.appendChild(shown);
+    wrap.appendChild(picker);
+    valueNode = wrap;
+  } else if (at === "status" || at === "steg") {
+    // Status-only activity (no tasks UI in process view)
+    valueNode = el("div", { class: "act-value act-status-only" }, [""]);
+  } else {
+    valueNode = el("div", { class: "act-value" }, [cell.value ?? ""]);
+  }
+
+  // Build unified activity field (brick)
+  const statusClass = cell.status === "green" ? "status-green" : (cell.status === "yellow" ? "status-yellow" : (cell.status === "red" ? "status-red" : ""));
+  const field = el("div", { class: `act-field ${statusClass} act-type-${at || "unknown"}` });
+
+  const statusCorner = el("div", {
+    class: "act-status-corner",
+    title: "Ändra status",
+    onclick: () => {
+      cell.status = nextActivityStatus(cell.status);
+      saveState(state);
+      render(state);
+    },
+  });
+
+  const ownerTxt = ((cell.ownerInitials || "").toUpperCase() || "--").slice(0, 2);
+  const ownerBtn = el("span", {
+    class: `owner-badge ${cell.comments.length > 0 ? "has-notes" : ""}`,
+    title: cell.comments.length ? `Notes (${cell.comments.length})` : "Notes",
+    onclick: () => openActivityNotesModal(state, row, a, user),
+    oncontextmenu: (e) => {
+      e.preventDefault();
+      openOwnerPickerModal(state, cell);
+    },
+  }, [ownerTxt]);
+
+  const valueWrap = el("div", { style: "flex:1;min-width:0;" }, [valueNode]);
+
+  // Make text fields easier to click: focus input when clicking the brick/value area
+  if (at === "text" && valueNode && typeof valueNode.focus === "function") {
+    field.style.cursor = "text";
+    const focusInput = () => { try { valueNode.focus(); } catch(_) {} };
+    valueWrap.addEventListener("click", (e) => {
+      // don't steal click from the input itself
+      if (e.target === valueNode) return;
+      focusInput();
+    });
+    field.addEventListener("click", (e) => {
+      // ignore clicks on status corner / owner badge
+      const t = e.target;
+      if (t === statusCorner || t === ownerBtn) return;
+      if (t && t.closest && (t.closest(".act-status-corner") || t.closest(".owner-badge"))) return;
+      focusInput();
+    });
+  }
+
+  field.appendChild(statusCorner);
+  field.appendChild(valueWrap);
+  field.appendChild(ownerBtn);
+
+  td.appendChild(field);
+  tr.appendChild(td);
       });
 
-      // Keep delete on row
+      // Actions (Done / Ta bort)
       tr.appendChild(el("td", {}, [
-        el("button", {
-          class: "icon-btn up-trash",
-          type: "button",
-          title: "Ta bort",
-          onclick: () => {
+        makeRowActionMenu({
+          onDone: () => {
+            const ok = confirm("Markera som DONE och flytta till Archive?");
+            if (!ok) return;
+            archiveProductRow(state, row);
+          },
+          onDelete: () => {
             const ok = confirm("Ta bort raden? Detta går inte att ångra.");
             if (!ok) return;
-            state.productRows = state.productRows.filter((x) => x !== row);
+            state.productRows = (state.productRows || []).filter((x) => x !== row);
             saveState(state);
             render(state);
-          },
-        }, ["🗑️"]),
+          }
+        })
       ]));
 
       tbody.appendChild(tr);
@@ -2415,8 +3166,8 @@ const tbody = el("tbody");
     if (!acts.length) {
       view.appendChild(el("div", { style: "margin-top:12px;color:#6b7280;font-size:12px;" }, [
         user?.role === "admin"
-          ? "Inga aktiviteter definierade. Som admin: lägg till aktiviteter under Produkt (admin-läget)."
-          : "Inga aktiviteter definierade ännu. Be admin definiera produkttabellen.",
+          ? "Inga aktiviteter definierade. Som admin: lägg till aktiviteter under Säljprocess Ny produkt (admin-läget)."
+          : "Inga aktiviteter definierade ännu. Be admin definiera säljtabellen.",
       ]));
     }
   }
@@ -2424,14 +3175,12 @@ const tbody = el("tbody");
 
 
 
-  function defaultRowForProduct(fromName = "") {
+  function defaultRowForProduct(fromName = "", fromType = "") {
     return {
       id: uid("product"),
       name: fromName || "",
-      launchQ: "",
-      sellStartB2C: "",
-      sellStartB2B: "",
-      tasks: { titleSku: [], po: [], price: [], msMaterial: [] },
+      type: fromType || "", // dev_type
+      fields: {},
       createdAt: Date.now(),
     };
   }
@@ -2447,6 +3196,7 @@ const tbody = el("tbody");
     return ["Alla", ...uniq];
   }
 
+  
   function openTodoNotesModal(state, todo, user) {
     if ((todo.category || "") === "Privat") {
       const myInit = (user?.initials || "").toUpperCase();
@@ -2472,128 +3222,341 @@ const tbody = el("tbody");
     ]);
 
     openModal({ title: "Tasks – Notes", sub: todo.title ? todo.title : "", bodyNode: body });
+  }
+
+  // -------------------------------
+  // Notes (User, manuellt, 1+ mottagare, badge, ingen mail)
+  // -------------------------------
   
+  // -------------------------------
+  // ToDo: Notes (plain text on the task)
+  // -------------------------------
+  function openTodoNotesTextModal(state, todo, user) {
+    const meInit = (user?.initials || "").toUpperCase();
+    if ((todo.category || "") === "Privat") {
+      if ((todo.assignee || "").toUpperCase() !== meInit) {
+        alert("Du kan inte öppna andras privata Tasks.");
+        return;
+      }
+    }
+
+    const wrap = el("div", {}, []);
+    const ta = el("textarea", {
+      class: "input",
+      placeholder: "Skriv Notes...",
+      style: "min-height:160px;white-space:pre-wrap;",
+    });
+    ta.value = (todo.notes || "").toString();
+
+    const saveBtn = el("button", { class: "btn btn-primary", type: "button" }, ["Spara"]);
+    saveBtn.addEventListener("click", () => {
+      todo.notes = (ta.value || "").toString();
+      saveState(state);
+      render(state);
+      closeModal();
+    });
+
+    wrap.appendChild(el("div", { class: "label" }, ["Notes"]));
+    wrap.appendChild(ta);
+    wrap.appendChild(el("div", { style: "display:flex;justify-content:flex-end;margin-top:12px;" }, [saveBtn]));
+
+    openModal({ title: "Notes", sub: todo.title ? todo.title : "", bodyNode: wrap });
+  }
+
+  // Comment-modal (messages/history). Reuse existing implementation.
   function openTodoCommentModal(state, todo, user) {
-    // View history + add new comment notification
+    const meInit = (user?.initials || "").toUpperCase();
+
+    // Private tasks: only the assignee may view/add messages
+    if ((todo.category || "") === "Privat") {
+      if ((todo.assignee || "").toUpperCase() !== meInit) {
+        alert("Du kan inte öppna andras privata Tasks.");
+        return;
+      }
+    }
+
     todo.comments = Array.isArray(todo.comments) ? todo.comments : [];
 
     const wrap = el("div", {}, []);
 
-    const header = el("div", { style: "display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:10px;" }, [
-      el("div", { style: "font-weight:1000;" }, ["Comment"]),
-      el("button", { class: "btn btn-primary", type: "button" }, ["Ny comment"]),
-    ]);
+    const list = el("div", { class: "todo-msg-list", style: "display:flex;flex-direction:column;gap:8px;max-height:260px;overflow:auto;padding:8px;border:1px solid #e5e7eb;border-radius:12px;background:#fff;" });
 
-    const list = el("div", { style: "display:flex;flex-direction:column;gap:10px;" });
-    const form = el("div", { style: "display:none;margin-top:10px;padding-top:10px;border-top:1px solid #e5e7eb;" });
+    const fmt = (iso) => {
+      try {
+        const d = new Date(iso);
+        return d.toLocaleString();
+      } catch(e) { return iso || ""; }
+    };
 
-    function fmt(ts) {
-      try { return new Date(ts).toLocaleString("sv-SE"); } catch { return ""; }
+    if (todo.comments.length === 0) {
+      list.appendChild(el("div", { style: "font-size:12px;color:#6b7280;" }, ["Inga meddelanden ännu."]));
+    } else {
+      todo.comments.forEach((c) => {
+        const header = el("div", { style: "display:flex;justify-content:space-between;gap:10px;font-size:12px;color:#6b7280;" }, [
+          el("span", {}, [(c.by || "").toString() || ""]),
+          el("span", {}, [fmt(c.date)]),
+        ]);
+        const bubble = el("div", { style: "padding:10px 12px;border:1px solid #e5e7eb;border-radius:12px;background:#f9fafb;" }, [
+          el("div", { style: "white-space:pre-wrap;" }, [(c.message || "").toString()]),
+        ]);
+        const row = el("div", {}, [header, bubble]);
+        list.appendChild(row);
+      });
     }
+
+    const ta = el("textarea", { class: "input", placeholder: "Skriv meddelande…", style: "min-height:90px;white-space:pre-wrap;" });
+    const send = el("button", { class: "btn btn-primary", type: "button" }, ["Skicka"]);
+
+    send.addEventListener("click", () => {
+      const msg = (ta.value || "").trim();
+      if (!msg) return;
+      todo.comments.push({
+        by: meInit,
+        to: "",
+        message: msg,
+        date: new Date().toISOString(),
+        seen: false,
+      });
+      ta.value = "";
+      saveState(state);
+      render(state);
+      closeModal();
+    });
+
+    wrap.appendChild(el("div", { class: "label" }, ["Message"]));
+    wrap.appendChild(list);
+    wrap.appendChild(el("div", { style: "margin-top:10px;" }, [ta]));
+    wrap.appendChild(el("div", { style: "display:flex;justify-content:flex-end;margin-top:12px;" }, [send]));
+
+    openModal({ title: "Message", sub: todo.title ? todo.title : "", bodyNode: wrap });
+  }
+
+
+function openTodoNotesModal(state, todo, user) {
+    const meInit = (user?.initials || "").toUpperCase();
+    todo.comments = Array.isArray(todo.comments) ? todo.comments : [];
+
+    const users = getUsers();
+    const initials = users
+      .map((u) => (u.initials || "").toUpperCase())
+      .filter(Boolean)
+      .sort((a, b) => a.localeCompare(b, "sv", { sensitivity: "base" }));
+
+    const wrap = el("div", {}, []);
+
+    const recipWrap = el("div", { style: "display:flex;flex-wrap:wrap;gap:10px;margin-bottom:12px;" });
+    const selected = new Set();
+
+    initials.forEach((ini) => {
+      const id = `c_to_${ini}_${Math.random().toString(16).slice(2)}`;
+      const cb = el("input", { type: "checkbox", id });
+      const lab = el("label", { for: id, style: "display:flex;align-items:center;gap:6px;cursor:pointer;" }, [
+        cb,
+        el("span", {}, [ini]),
+      ]);
+      cb.addEventListener("change", () => {
+        if (cb.checked) selected.add(ini);
+        else selected.delete(ini);
+      });
+      recipWrap.appendChild(lab);
+    });
+
+    const msg = el("textarea", { class: "input", placeholder: "Meddelande...", style: "min-height:120px;" });
+
+    const saveBtn = el("button", { class: "btn btn-primary", type: "button", title: "Öppnar din e-postklient och förifyller ett mail" }, ["Send"]);
+    const list = el("div", { style: "display:flex;flex-direction:column;gap:10px;margin-top:14px;" });
 
     function renderList() {
       list.innerHTML = "";
-      const items = (todo.comments || []).slice().sort((a, b) => (b.at || 0) - (a.at || 0));
-
+      const items = Array.isArray(todo.comments) ? todo.comments.slice().reverse() : [];
       if (!items.length) {
-        list.appendChild(el("div", { style: "padding:12px;border:1px dashed #d1d5db;border-radius:12px;color:#6b7280;" }, [
-          "Inga comments ännu.",
-        ]));
+        list.appendChild(el("div", { style: "font-size:13px;color:#6b7280;" }, ["Inga kommentarer ännu."]));
         return;
       }
-
       items.forEach((c) => {
-        const toTxt = (c.to || []).join(", ");
-        list.appendChild(el("div", { style: "padding:10px;border:1px solid #e5e7eb;border-radius:12px;background:#fff;" }, [
-          el("div", { style: "display:flex;justify-content:space-between;gap:10px;align-items:flex-start;flex-wrap:wrap;" }, [
-            el("div", { style: "font-weight:900;" }, [toTxt ? `Till: ${toTxt}` : "Till: -"]),
-            el("div", { style: "font-size:12px;color:#6b7280;" }, [fmt(c.at)]),
-          ]),
-          el("div", { style: "margin-top:6px;white-space:pre-wrap;" }, [c.message || ""]),
-        ]));
+        const to = Array.isArray(c.to) ? c.to.join(", ") : "";
+        const when = c.date ? new Date(c.date).toLocaleString("sv-SE") : "";
+        const by = c.by || "";
+        const card = el("div", { style: "border:1px solid #e5e7eb;border-radius:12px;padding:10px;background:#fff;" });
+        card.appendChild(
+          el(
+            "div",
+            { style: "display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:6px;" },
+            [el("div", { style: "font-weight:600;" }, [`${by} → ${to}`]), el("div", { style: "font-size:12px;color:#6b7280;" }, [when])]
+          )
+        );
+        card.appendChild(el("div", { style: "white-space:pre-wrap;" }, [c.message || ""]));
+        list.appendChild(card);
       });
     }
 
-    function openForm() {
-      form.style.display = "block";
-      form.innerHTML = "";
+    saveBtn.addEventListener("click", () => {
+      const to = Array.from(selected);
+      const message = (msg.value || "").trim();
+      if (!to.length) return alert("Välj minst en mottagare (initial).");
+      if (!message) return alert("Skriv ett meddelande.");
 
-      const users = getUsers()
-        .map((u) => ({ initials: (u.initials || "").toUpperCase(), email: u.email || "" }))
-        .filter((u) => u.initials.length > 0);
-
-      const uniq = uniqStrings(users.map((u) => u.initials)).sort((a, b) => a.localeCompare(b, "sv", { sensitivity: "base" }));
-
-      const pickWrap = el("div", { style: "display:flex;flex-wrap:wrap;gap:8px;" });
-      const selected = new Set();
-
-      uniq.forEach((ini) => {
-        const chip = el("button", { type: "button", class: "pill", style: "font-weight:900;" }, [ini]);
-        chip.addEventListener("click", () => {
-          if (selected.has(ini)) {
-            selected.delete(ini);
-            chip.classList.remove("pill-done");
-          } else {
-            selected.add(ini);
-            chip.classList.add("pill-done");
-          }
-        });
-        pickWrap.appendChild(chip);
+      todo.comments = Array.isArray(todo.comments) ? todo.comments : [];
+      todo.comments.push({
+        by: meInit,
+        to,
+        message,
+        date: new Date().toISOString(),
+        seen: false,
       });
 
-      const msg = el("textarea", { class: "input", placeholder: "Skriv meddelande…", style: "min-height:110px;" });
 
-      const actions = el("div", { style: "display:flex;gap:10px;justify-content:flex-end;margin-top:10px;flex-wrap:wrap;" });
-      const cancel = el("button", { class: "btn", type: "button" }, ["Avbryt"]);
-      const save = el("button", { class: "btn btn-primary", type: "button" }, ["Skicka"]);
+      // Skicka mail (samma mottagare som kommentaren)
+      const subj = `ToDo: ${todo.title || "Task"} (Kommentar)`;
+      const mailBody = [
+        `Från: ${meInit}`,
+        `Till: ${to.join(", ")}`,
+        "",
+        message,
+      ].join("\n");
+sendMail({ toInitials: to, subject: subj, body: mailBody });
 
-      cancel.addEventListener("click", () => { form.style.display = "none"; });
-      save.addEventListener("click", () => {
-        const to = Array.from(selected);
-        const message = (msg.value || "").toString().trim();
-        if (!to.length) { alert("Välj minst en mottagare (initialer)."); return; }
-        if (!message) { alert("Skriv ett meddelande."); return; }
 
-        const entry = { to, message, at: Date.now() };
-        todo.comments = Array.isArray(todo.comments) ? todo.comments : [];
-        todo.comments.push(entry);
-
-        saveState(state);
-        render(state);
-
-        // Send mail (mailto) to emails on users (if provided)
-        const subject = `Tasks – Comment: ${todo.title || ""}`.trim();
-        const body = `Task: ${todo.title || ""}\nKategori: ${todo.category || ""}\nAnsvarig: ${todo.assignee || ""}\n\nMeddelande:\n${message}\n\nTid: ${new Date(entry.at).toLocaleString("sv-SE")}\n`;
-        sendCommentMail(to, subject, body);
-
-        form.style.display = "none";
-        renderList();
-      });
-
-      actions.appendChild(cancel);
-      actions.appendChild(save);
-
-      form.appendChild(el("div", { class: "label" }, ["Mottagare (initialer)"]));
-      form.appendChild(pickWrap);
-      form.appendChild(el("div", { class: "label", style: "margin-top:10px;" }, ["Meddelande"]));
-      form.appendChild(msg);
-      form.appendChild(actions);
-    }
-
-    header.querySelector("button.btn.btn-primary").addEventListener("click", () => openForm());
-
-    wrap.appendChild(header);
-    wrap.appendChild(list);
-    wrap.appendChild(form);
+      msg.value = "";
+      selected.clear();
+      recipWrap.querySelectorAll("input[type=checkbox]").forEach((c) => (c.checked = false));
+      saveState(state);
+      render(state); // uppdaterar badge i listan
+      renderList();
+    });
 
     renderList();
 
-    openModal({ title: "Comment", sub: todo.title ? todo.title : "", bodyNode: wrap });
+    wrap.appendChild(el("div", { class: "label" }, ["Mottagare (initialer)"]));
+    wrap.appendChild(recipWrap);
+    wrap.appendChild(el("div", { class: "label" }, ["Meddelande"]));
+    wrap.appendChild(msg);
+    wrap.appendChild(el("div", { style: "display:flex;justify-content:flex-end;margin-top:12px;" }, [saveBtn]));
+    wrap.appendChild(el("hr", { style: "margin:14px 0;border:none;border-top:1px solid #e5e7eb;" }));
+    wrap.appendChild(el("div", { class: "label" }, ["Historik"]));
+    wrap.appendChild(list);
+
+    openModal({ title: "Notes", sub: todo.title ? todo.title : "", bodyNode: wrap });
+  }
+// -------------------------------
+// Notes (Activity-cell: Utvecklingsprocess + Produkt)
+// -------------------------------
+function openActivityNotesModalLegacy(state, entryOrRow, activity, user) {
+  const meInit = (user?.initials || "").toUpperCase();
+  const cell = ensureDevEntryCell(entryOrRow, activity);
+  cell.comments = Array.isArray(cell.comments) ? cell.comments : [];
+
+  const users = getUsers();
+  const initials = users
+    .map((u) => (u.initials || "").toUpperCase())
+    .filter(Boolean)
+    .sort((a, b) => a.localeCompare(b, "sv", { sensitivity: "base" }));
+
+  const wrap = el("div", {}, []);
+
+  const recipWrap = el("div", { style: "display:flex;flex-wrap:wrap;gap:10px;margin-bottom:12px;" });
+  const selected = new Set();
+
+  initials.forEach((ini) => {
+    const id = `c_to_${ini}_${Math.random().toString(16).slice(2)}`;
+    const cb = el("input", { type: "checkbox", id });
+    const lab = el("label", { for: id, style: "display:flex;align-items:center;gap:6px;cursor:pointer;" }, [
+      cb,
+      el("span", {}, [ini]),
+    ]);
+    cb.addEventListener("change", () => {
+      if (cb.checked) selected.add(ini);
+      else selected.delete(ini);
+    });
+    recipWrap.appendChild(lab);
+  });
+
+  const msg = el("textarea", { class: "input", placeholder: "Meddelande...", style: "min-height:120px;" });
+
+  const saveBtn = el("button", { class: "btn btn-primary", type: "button", title: "Öppnar din e-postklient och förifyller ett mail" }, ["Send"]);
+  const list = el("div", { style: "display:flex;flex-direction:column;gap:10px;margin-top:14px;" });
+
+  function renderList() {
+    list.innerHTML = "";
+    const items = Array.isArray(cell.comments) ? cell.comments.slice().reverse() : [];
+    if (!items.length) {
+      list.appendChild(el("div", { style: "font-size:13px;color:#6b7280;" }, ["Inga kommentarer ännu."]));
+      return;
+    }
+    items.forEach((c) => {
+      const to = Array.isArray(c.to) ? c.to.join(", ") : "";
+      const when = c.date ? new Date(c.date).toLocaleString("sv-SE") : "";
+      const by = c.by || "";
+      const card = el("div", { style: "border:1px solid #e5e7eb;border-radius:12px;padding:10px;background:#fff;" });
+      card.appendChild(
+        el(
+          "div",
+          { style: "display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:6px;" },
+          [el("div", { style: "font-weight:600;" }, [`${by} → ${to}`]), el("div", { style: "font-size:12px;color:#6b7280;" }, [when])]
+        )
+      );
+      card.appendChild(el("div", { style: "white-space:pre-wrap;" }, [c.message || ""]));
+      list.appendChild(card);
+    });
   }
 
+  saveBtn.addEventListener("click", () => {
+    const to = Array.from(selected);
+    const message = (msg.value || "").trim();
+    if (!to.length) return alert("Välj minst en mottagare (initial).");
+    if (!message) return alert("Skriv ett meddelande.");
+
+    cell.comments = Array.isArray(cell.comments) ? cell.comments : [];
+    cell.comments.push({
+      by: meInit,
+      to,
+      message,
+      date: new Date().toISOString(),
+      seen: false,
+    });
+
+
+    // Skicka mail (samma mottagare som kommentaren)
+    const ctxName = entryOrRow?.name || entryOrRow?.title || "";
+    const actName = activity?.name || "";
+    const subj = `${actName}: ${ctxName || "Rad"} (Kommentar)`;
+    const mailBody = [
+      `Från: ${meInit}`,
+      `Till: ${to.join(", ")}`,
+      ctxName ? `Rad: ${ctxName}` : null,
+      actName ? `Aktivitet: ${actName}` : null,
+      "",
+      message,
+    ].filter(Boolean).join("\n");
+    sendMail({ toInitials: to, subject: subj, body: mailBody });
+
+
+    msg.value = "";
+    selected.clear();
+    recipWrap.querySelectorAll("input[type=checkbox]").forEach((c) => (c.checked = false));
+    saveState(state);
+    render(state); // uppdaterar badge i tabellen
+    renderList();
+  });
+
+  renderList();
+
+  const entryName = (entryOrRow?.name || entryOrRow?.title || "").toString();
+  const actName = (activity?.name || "").toString();
+
+  wrap.appendChild(el("div", { class: "label" }, ["Mottagare (initialer)"]));
+  wrap.appendChild(recipWrap);
+  wrap.appendChild(el("div", { class: "label" }, ["Meddelande"]));
+  wrap.appendChild(msg);
+  wrap.appendChild(el("div", { style: "display:flex;justify-content:flex-end;margin-top:12px;" }, [saveBtn]));
+  wrap.appendChild(el("hr", { style: "margin:14px 0;border:none;border-top:1px solid #e5e7eb;" }));
+  wrap.appendChild(el("div", { class: "label" }, ["Historik"]));
+  wrap.appendChild(list);
+
+  openModal({ title: "Notes", sub: `${entryName}${entryName && actName ? " – " : ""}${actName}`, bodyNode: wrap });
 }
 
-  function defaultTodo(state, category = "Allmänt", currentUserInitials = "Alla") {
+function defaultTodo(state, category = "Allmänt", currentUserInitials = "Alla") {
     const cat = getTodoCategories(state).includes(category) ? category : "Allmänt";
     const assignee = cat === "Privat" ? currentUserInitials : "Alla";
     return {
@@ -2751,20 +3714,100 @@ const tbody = el("tbody");
         }),
       ]));
 
-      // assignee
-      const sel = el("select", {
+      // assignee (allow multiple for non-Privat) - custom picker that shows initials
+      const parseAssignees = (val) => {
+        const s = (val || "").toString().trim();
+        if (!s || s === "Alla") return ["Alla"];
+        return s.split(",").map(x => x.trim()).filter(Boolean);
+      };
+      const fmtSelected = (arr) => (arr.includes("Alla") ? "Alla" : arr.join(", "));
+
+      const selected = parseAssignees(t.assignee);
+
+      const cellWrap = el("div", { style: "position:relative;display:inline-block;min-width:110px;" }, []);
+      const btn = el("button", {
+        type: "button",
         class: "input",
-        onchange: (e) => { t.assignee = e.target.value; saveState(state); render(state); },
-      }, assignees.map((a) => {
-        const opt = el("option", { value: a }, [a]);
-        if ((t.assignee || "Alla") === a) opt.selected = true;
-        return opt;
-      }));
+        style: "width:100%;text-align:left;display:flex;align-items:center;justify-content:space-between;gap:8px;cursor:pointer;",
+        title: "Välj ansvarig(a)",
+      }, [
+        el("span", {}, [fmtSelected(selected)]),
+        el("span", { style: "color:#6b7280;font-size:12px;" }, ["▾"])
+      ]);
+
+      const menu = el("div", {
+        style: "position:absolute;z-index:50;top:calc(100% + 6px);left:0;background:#fff;border:1px solid #e5e7eb;border-radius:12px;box-shadow:0 10px 25px rgba(0,0,0,.08);padding:10px;min-width:180px;display:none;",
+      }, []);
+
+      const closeMenu = () => (menu.style.display = "none");
+      const openMenu = () => (menu.style.display = "block");
+      const toggleMenu = () => (menu.style.display === "none" ? openMenu() : closeMenu());
+
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        if (btn.disabled) return;
+        toggleMenu();
+      });
+
+      const setSelected = (arr) => {
+        // Alla is exclusive
+        let next = arr.length ? arr : ["Alla"];
+        if (next.includes("Alla") && next.length > 1) next = ["Alla"];
+        t.assignee = next.includes("Alla") ? "Alla" : next.join(", ");
+        saveState(state);
+        render(state);
+      };
+
+      const mkItem = (value) => {
+        const row = el("label", { style: "display:flex;align-items:center;gap:10px;padding:6px 6px;border-radius:10px;cursor:pointer;" }, []);
+        row.addEventListener("mouseenter", () => (row.style.background = "#f9fafb"));
+        row.addEventListener("mouseleave", () => (row.style.background = "transparent"));
+
+        const cb = el("input", { type: "checkbox" });
+        cb.checked = selected.includes(value);
+
+        cb.addEventListener("change", () => {
+          let cur = parseAssignees(t.assignee);
+          // toggle
+          if (cb.checked) {
+            if (!cur.includes(value)) cur.push(value);
+          } else {
+            cur = cur.filter(x => x !== value);
+          }
+          // exclusivity for Alla
+          if (value === "Alla" && cb.checked) {
+            cur = ["Alla"];
+          } else if (value !== "Alla") {
+            cur = cur.filter(x => x !== "Alla");
+          }
+          setSelected(cur);
+        });
+
+        row.appendChild(cb);
+        row.appendChild(el("span", {}, [value]));
+        return row;
+      };
+
+      // Build menu items (Alla first)
+      const items = ["Alla", ...assignees.filter(a => a !== "Alla")];
+      items.forEach(v => menu.appendChild(mkItem(v)));
+
+      // Click outside closes
+      document.addEventListener("click", () => closeMenu(), { once: true });
+
+      cellWrap.appendChild(btn);
+      cellWrap.appendChild(menu);
+
       if (t.category === "Privat") {
-        sel.value = myInit || "Alla";
-        sel.disabled = true;
+        btn.disabled = true;
+        btn.style.opacity = "0.7";
+        btn.style.cursor = "not-allowed";
+        btn.firstChild.textContent = (myInit || "Alla");
+        // Also persist the lock for safety
+        t.assignee = (myInit || "Alla");
       }
-      tr.appendChild(el("td", {}, [sel]));
+
+      tr.appendChild(el("td", {}, [cellWrap]));
 
       // due date (red if overdue)
       const todayIso = new Date().toISOString().slice(0, 10);
@@ -2778,27 +3821,18 @@ const tbody = el("tbody");
         }),
       ]));
 
-      // notes button (green if has content)
+      // Notes (text) – green + badge if has content
       const hasNotes = !!(t.notes && t.notes.trim().length);
       const notesBtn = el("button", {
         type: "button",
         class: `pill pill-notes ${hasNotes ? "is-notes" : ""}`,
         title: "Notes",
-        onclick: () => openTodoNotesModal(state, t, user),
+        onclick: () => openTodoNotesTextModal(state, t, user),
       }, ["Notes"]);
-      tr.appendChild(el("td", {}, [notesBtn]));
+      const notesWrap = el("span", { class: "pill-badge-wrap" }, [notesBtn]);
+      if (hasNotes) notesWrap.appendChild(el("span", { class: "badge" }, ["1"]));
+      tr.appendChild(el("td", {}, [notesWrap]));
 
-
-      // comment (icon) – före soptunnan
-      const commentCount = Array.isArray(t.comments) ? t.comments.length : 0;
-      const commentBtn = el("button", {
-        type: "button",
-        class: "icon-btn",
-        title: commentCount ? `Comment (${commentCount})` : "Comment",
-        onclick: () => openTodoCommentModal(state, t, user),
-        style: "width:40px;height:40px;border-radius:999px;display:flex;align-items:center;justify-content:center;",
-      }, ["💬"]);
-      tr.appendChild(el("td", {}, [commentBtn]));
 
       // trash
       const trashBtn = el("button", {
@@ -2836,12 +3870,178 @@ const tbody = el("tbody");
     }
   }
 
+
+  // -------------------------------
+  // Archive helpers (Dev/Product/ToDo)
+  // -------------------------------
+  function ensureArchives(state) {
+    state.archive = state.archive || { dev: [], product: [] };
+    state.archive.dev = Array.isArray(state.archive.dev) ? state.archive.dev : [];
+    state.archive.product = Array.isArray(state.archive.product) ? state.archive.product : [];
+  }
+
+  function addProductRowFromDev(state, devEntry) {
+    // Skapar en produkt-rad med endast Namn + Typ från en Utvecklingsprocess-rad
+    state.productRows = Array.isArray(state.productRows) ? state.productRows : [];
+    const row = { id: uid("prod"), fields: {}, createdAt: Date.now() };
+
+    const acts = (state.productSchema?.activities || []).slice();
+    // Normalize legacy activity types
+    state.productSchema.activities.forEach((a) => { if (a && a.type === "kalender") a.type = "date"; });
+
+    const norm = (s) => String(s || "").trim().toLowerCase();
+    const byName = (wanted) => acts.find((a) => norm(a.name) === norm(wanted));
+
+    const nameAct = byName("Namn") || byName("Name");
+    const typeAct = byName("P-typ") || byName("Typ") || byName("Type");
+
+    const devName = devEntry?.name ?? devEntry?.title ?? "";
+    const devType = devEntry?.type ?? devEntry?.devType ?? devEntry?.category ?? "";
+
+    if (nameAct) {
+      row.fields[nameAct.id] = { value: devName };
+    } else {
+      // fallback if schema saknar Namn-kolumn (bör inte hända)
+      row.name = devName;
+    }
+
+    if (typeAct) {
+      row.fields[typeAct.id] = { value: devType };
+    } else {
+      row.type = devType;
+    }
+
+    state.productRows.push(row);
+  }
+
+  function archiveDevEntry(state, entry) {
+    ensureArchives(state);
+
+    // 1) Lägg i dev-archive
+    const copy = JSON.parse(JSON.stringify(entry));
+    copy.archivedAt = Date.now();
+    state.archive.dev.push(copy);
+
+    // 2) Skapa en rad i Produkt med endast Namn + Typ
+    addProductRowFromDev(state, entry);
+
+    // 3) Ta bort från aktiv lista
+    state.devEntries = (state.devEntries || []).filter((x) => x.id !== entry.id);
+
+    saveState(state);
+    render(state);
+  }
+
+  function archiveProductRow(state, row) {
+    ensureArchives(state);
+    const copy = JSON.parse(JSON.stringify(row));
+    copy.archivedAt = Date.now();
+    state.archive.product.push(copy);
+    state.productRows = (state.productRows || []).filter((x) => x.id !== row.id);
+    saveState(state);
+    render(state);
+  }
+
+
+  function emailsFromInitials(initials) {
+    const users = getUsers();
+    const map = new Map(
+      (users || []).map((u) => [(u.initials || "").toUpperCase(), (u.email || "").trim()])
+    );
+    return (initials || [])
+      .map((ini) => map.get(String(ini || "").toUpperCase()) || "")
+      .filter((e) => !!e);
+  }
+
+  function sendMail({ toInitials = [], subject = "", body = "" }) {
+    const emails = emailsFromInitials(toInitials);
+    if (!emails.length) {
+      alert("Hittade ingen e-postadress för valda mottagare. Kontrollera att användare har e-post sparad.");
+      return;
+    }
+    const to = emails.join(";");
+    const qs = `subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+    // Öppnar användarens mail-klient
+    window.location.href = `mailto:${to}?${qs}`;
+  }
+
+  function fmtDateTime(ts) {
+    if (!ts) return "";
+    const d = new Date(ts);
+    const pad = (n) => String(n).padStart(2, "0");
+    return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  }
+
+  function openDevArchiveModal(state) {
+    ensureArchives(state);
+    const archived = (state.archive.dev || []).slice().reverse();
+    const body = archived.length === 0
+      ? el("div", { style: "color:#6b7280;" }, ["Inga arkiverade rader ännu."])
+      : el("div", { style: "display:flex;flex-direction:column;gap:10px;" },
+          archived.map((e) => el("div", { class: "archive-card" }, [
+            el("div", { style: "font-weight:900;" }, [e.name || "(namn saknas)"]),
+            el("div", { style: "font-size:12px;opacity:.75;" }, [`Arkiverad: ${fmtDateTime(e.archivedAt)}`]),
+          ]))
+        );
+    openModal({ title: "Archive", sub: "Utvecklingsprocess", bodyNode: body });
+  }
+
+  function openProductArchiveModal(state) {
+    ensureArchives(state);
+    const archived = (state.archive.product || []).slice().reverse();
+    const body = archived.length === 0
+      ? el("div", { style: "color:#6b7280;" }, ["Inga arkiverade rader ännu."])
+      : el("div", { style: "display:flex;flex-direction:column;gap:10px;" },
+          archived.map((r) => el("div", { class: "archive-card" }, [
+            el("div", { style: "font-weight:900;" }, [r.name || "(namn saknas)"]),
+            el("div", { style: "font-size:12px;opacity:.75;" }, [`Arkiverad: ${fmtDateTime(r.archivedAt)}`]),
+          ]))
+        );
+    openModal({ title: "Archive", sub: "Säljprocess Ny produkt", bodyNode: body });
+  }
+
+  function openTodoArchiveModal(state, user) {
+    ensureWeeklyRollover(state);
+
+    const myInit = (user?.initials || "").toUpperCase();
+    const canSee = (t) => {
+      if ((t.category || "") === "Privat") return (t.assignee || "").toUpperCase() === myInit;
+      return true;
+    };
+
+    const archived = (state.todo?.archive || []).filter(canSee).slice().reverse();
+
+    const rowCard = (t) => {
+      const title = t.title || "(titel saknas)";
+      const meta = [
+        `Kategori: ${t.category || "Allmänt"}`,
+        `Ansvarig: ${t.assignee || "Alla"}`,
+        t.dueDate ? `Färdig: ${t.dueDate}` : null,
+        `Vecka: ${t.week || "-"}`,
+        t.archivedAt ? `Arkiverad: ${fmtDateTime(t.archivedAt)}` : null,
+      ].filter(Boolean).join(" • ");
+
+      return el("div", { class: "archive-card" }, [
+        el("div", { style: "font-weight:900;" }, [title]),
+        el("div", { style: "font-size:12px;opacity:.75;" }, [meta]),
+      ]);
+    };
+
+    const body = archived.length === 0
+      ? el("div", { style: "color:#6b7280;" }, ["Inga arkiverade Tasks ännu."])
+      : el("div", { style: "display:flex;flex-direction:column;gap:10px;" }, archived.map(rowCard));
+
+    openModal({ title: "Archive", sub: "ToDo", bodyNode: body });
+  }
+
   // -------------------------------
   // Tabs + Hero
   // -------------------------------
   function renderTabs(state) {
-    const tabs = document.getElementById("tabs");
-    tabs.innerHTML = "";
+    ensureValidActiveTab(state);
+
+    const tabsEl = document.getElementById("tabs");
+    tabsEl.innerHTML = "";
 
     const mkTab = (key, label) =>
       el("button", {
@@ -2850,20 +4050,21 @@ const tbody = el("tbody");
         onclick: () => { state.activeTab = key; saveState(state); render(state); },
       }, [label]);
 
-    tabs.appendChild(mkTab(Tabs.DEV, "Utveckling"));
-    tabs.appendChild(mkTab(Tabs.PRODUCT, "Produkt"));
-    tabs.appendChild(mkTab(Tabs.TODO, "ToDo"));
+    TAB_CONFIG.forEach(t => tabsEl.appendChild(mkTab(t.key, t.label)));
   }
 
   function renderHero(state, user) {
+    ensureValidActiveTab(state);
+
     const heroTitle = document.getElementById("heroTitle");
     const heroInline = document.getElementById("heroInline");
     const heroActions = document.getElementById("heroActions");
     heroInline.innerHTML = "";
     heroActions.innerHTML = "";
 
-    if (state.activeTab === Tabs.DEV) {
-      heroTitle.textContent = "Utveckling";
+    switch (state.activeTab) {
+      case Tabs.DEV: {
+      heroTitle.textContent = "Utvecklingsprocess";
 
       // Admin: inga knappar här (admin hanterar struktur i admin-vyn)
       if (user?.role === "admin") return;
@@ -2875,11 +4076,18 @@ const tbody = el("tbody");
         onclick: () => openNewDevEntryForm(state),
       }, ["Ny utveckling"]));
 
-      return;
-    }
 
-    if (state.activeTab === Tabs.PRODUCT) {
-      heroTitle.textContent = "Produkt";
+      heroActions.appendChild(el("button", {
+        class: "btn",
+        type: "button",
+        onclick: () => openDevArchiveModal(state),
+      }, ["Archive"]));
+
+      return;
+      }
+
+      case Tabs.PRODUCT: {
+      heroTitle.textContent = "Säljprocess Ny produkt";
 
       // User: skapa rader i produkttabellen
       if (user?.role !== "admin") {
@@ -2887,18 +4095,40 @@ const tbody = el("tbody");
           class: "btn btn-primary",
           type: "button",
           onclick: () => {
+            const actsNow = (state.productSchema?.activities || []).filter(Boolean);
             state.productRows = state.productRows || [];
             state.productRows.push(defaultRowForProduct("")); 
             saveState(state);
             render(state);
           },
         }, ["Ny produkt"]));
-      }
+      
+
+      heroActions.appendChild(el("button", {
+        class: "btn",
+        type: "button",
+        onclick: () => openProductArchiveModal(state),
+      }, ["Archive"]));
+}
 
       return;
-    }
+      }
 
-    // Tasks
+      case Tabs.ROUTINES: {
+        heroTitle.textContent = "Rutiner";
+
+        if (isAdmin(user)) {
+          heroActions.appendChild(el("button", {
+            class: "btn btn-primary",
+            type: "button",
+            onclick: () => openNewRoutineModal(state),
+          }, ["Ny rutin"]));
+        }
+        return;
+      }
+
+      case Tabs.TODO: {
+// Tasks
     heroTitle.textContent = "ToDo";
 
     const todoFilterSelect = el("select", {
@@ -2911,23 +4141,25 @@ const tbody = el("tbody");
     }));
     heroInline.appendChild(todoFilterSelect);
 
-    // Veckoväljare (ISO)
-    const weekIn = el("input", { class: "input up-select", type: "week", style: "max-width:150px;" });
-    weekIn.value = state.todo.selectedWeek || isoWeekKey(new Date());
-    state.todo.selectedWeek = weekIn.value;
+    // Vecka (ISO) - endast visning (auto uppdateras vid ny vecka)
+    ensureWeeklyRollover(state);
+    const wkKey = isoWeekKey(new Date()); // ex: 2026-W06
+    state.todo.selectedWeek = wkKey;
 
-    const range = weekRangeFromKey(weekIn.value);
+    const parts = String(wkKey).split("-W");
+    const wkYear = parts[0] || "";
+    const wkNo = parts[1] || "";
+
+    const weekBox = el("div", { class: "input up-select week-display", style: "max-width:180px;" }, [
+      `Vecka ${wkNo}  ${wkYear}`
+    ]);
+
+    const range = weekRangeFromKey(wkKey);
     const weekHint = el("div", { style: "font-size:12px;color:#6b7280;min-width:190px;align-self:center;" }, [
       range ? `${fmtDateSv(range.start)} – ${fmtDateSv(range.end)}` : ""
     ]);
 
-    weekIn.addEventListener("change", () => {
-      state.todo.selectedWeek = weekIn.value;
-      saveState(state);
-      render(state);
-    });
-
-    heroInline.appendChild(weekIn);
+    heroInline.appendChild(weekBox);
     heroInline.appendChild(weekHint);
 
 
@@ -2936,26 +4168,73 @@ const tbody = el("tbody");
       type: "button",
       onclick: () => openNewTodoForm(state, user),
     }, ["Ny task"]));
+
+      heroActions.appendChild(el("button", {
+        class: "btn",
+        type: "button",
+        onclick: () => openTodoArchiveModal(state, user),
+      }, ["Archive"]));
+
+        return;
+      }
+
+      default: {
+        // Unknown tab: don't silently fall back.
+        heroTitle.textContent = "Okänd vy";
+        heroInline.appendChild(el("div", { style: "color:#b91c1c;font-size:13px;" }, [
+          "Okänd flik: ", String(state.activeTab || "(tom)"),
+        ]));
+        return;
+      }
+    }
   }
 
-  // -------------------------------
-  // Render
-  // -------------------------------
   function render(state) {
     const user = currentUser();
+    ensureValidActiveTab(state);
+
     renderTabs(state);
     renderHero(state, user);
 
-    if (state.activeTab === Tabs.DEV) {
-      if (user?.role === "admin") renderDevAdminView(state);
-      else renderDevTable(state);
-    } else if (state.activeTab === Tabs.PRODUCT) {
-      if (user?.role === "admin") renderProductAdminView(state);
-      else renderProductTable(state);
-    } else {
-      renderTodoTable(state, user);
+    switch (state.activeTab) {
+      case Tabs.DEV:
+        if (isAdmin(user)) renderDevAdminView(state);
+        else renderDevTable(state);
+        return;
+
+      case Tabs.PRODUCT:
+        if (isAdmin(user)) renderProductAdminView(state);
+        else renderProductTable(state);
+        return;
+
+      case Tabs.TODO:
+        renderTodoTable(state, user);
+        return;
+
+      case Tabs.ROUTINES:
+        renderRoutinesTab(state, user);
+        return;
+
+      default: {
+        // This should never happen unless state is corrupted or TAB_CONFIG and render() are out of sync.
+        const view = document.getElementById("view");
+        view.innerHTML = "";
+        view.appendChild(el("div", { class: "card", style: "padding:12px;border:1px solid rgba(185,28,28,.35);" }, [
+          el("div", { style: "font-weight:900;color:#b91c1c;margin-bottom:6px;" }, ["Okänd flik"]),
+          el("div", { style: "font-size:13px;color:rgba(17,24,39,.75);" }, [
+            "activeTab=", String(state.activeTab || "(tom)"),
+          ]),
+        ]));
+        console.warn("Unknown activeTab:", state.activeTab);
+        return;
+      }
     }
   }
+
+
+
+  // -------------------------------
+  // CSS additions
 
   // -------------------------------
   // CSS additions (overlay on existing style.css)
@@ -3039,7 +4318,25 @@ const tbody = el("tbody");
         border-color: rgba(34,197,94,.35);
       }
 
-      .is-overdue{
+      
+.icon-badge-wrap{ position:relative; display:inline-flex; }
+.icon-badge-wrap .badge{ position:absolute; top:-6px; right:-6px; }
+.badge{
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  min-width:18px;
+  height:18px;
+  padding:0 6px;
+  border-radius:999px;
+  font-size:12px;
+  font-weight:600;
+  background:#111827;
+  color:#fff;
+  line-height:1;
+}
+
+.is-overdue{
         border-color: rgba(239,68,68,.65) !important;
         box-shadow: 0 0 0 3px rgba(239,68,68,.12);
       }
@@ -3083,6 +4380,688 @@ const tbody = el("tbody");
     render(state);
   }
 
+
+  /* =========================
+     TOPBAR: RUTINER
+     ========================= */
+
+  const ROUTINES_KEY = "routines";
+
+  function loadRoutines() {
+    try { return JSON.parse(localStorage.getItem(ROUTINES_KEY) || "[]"); }
+    catch { return []; }
+  }
+
+  function saveRoutines(routines) {
+    localStorage.setItem(ROUTINES_KEY, JSON.stringify(routines || []));
+  }
+
+  function ensureRoutinesSelected(state, routines) {
+    state.routines = state.routines || {};
+    const sel = state.routines.selectedId;
+    if (sel && routines.some(r => r.id === sel)) return sel;
+    if (routines[0]) {
+      state.routines.selectedId = routines[0].id;
+      saveState(state);
+      return routines[0].id;
+    }
+    state.routines.selectedId = null;
+    saveState(state);
+    return null;
+  }
+
+  function renderRoutinesHero(state, user) {
+    const heroInline = document.getElementById("heroInline");
+    const heroActions = document.getElementById("heroActions");
+    heroInline.innerHTML = "";
+    heroActions.innerHTML = "";
+
+    const routines = loadRoutines();
+    const selectedId = ensureRoutinesSelected(state, routines);
+
+    // Dropdown
+    const select = el("select", {
+      class: "input up-select",
+      onchange: (e) => {
+        state.routines = state.routines || {};
+        state.routines.selectedId = e.target.value || null;
+        saveState(state);
+        render(state);
+      }
+    }, []);
+
+    if (!routines.length) {
+      select.appendChild(el("option", { value: "" }, ["(Inga rutiner)"]));
+      select.disabled = true;
+    } else {
+      routines.forEach(r => {
+        const opt = el("option", { value: r.id }, [r.namn || "(Namnlös)"]);
+        if (r.id === selectedId) opt.selected = true;
+        select.appendChild(opt);
+      });
+    }
+
+    heroInline.appendChild(select);
+
+    // Admin actions
+    if (user?.role === "admin") {
+      heroActions.appendChild(el("button", {
+        class: "btn btn-primary",
+        type: "button",
+        onclick: () => openNewRoutineModal(state),
+      }, ["Ny rutin"]));
+
+      heroActions.appendChild(el("button", {
+        class: "btn",
+        type: "button",
+        onclick: () => {
+          const routines2 = loadRoutines();
+          const sid = state?.routines?.selectedId;
+          if (!sid) return;
+          const r = routines2.find(x => x.id === sid);
+          const name = r?.namn || "vald rutin";
+          if (!confirm(`Ta bort "${name}"?`)) return;
+          saveRoutines(routines2.filter(x => x.id !== sid));
+          const after = loadRoutines();
+          ensureRoutinesSelected(state, after);
+          render(state);
+        },
+      }, ["Ta bort rutin"]));
+    }
+  }
+// ---- Rutiner: Notes modal (per steg) ----
+function openRoutineStepNotesModal({ mode, stepIndex, getText, setText }) {
+  const isEdit = mode === "admin-edit";
+  const ta = el("textarea", { class: "textarea", rows: 10, placeholder: "Notes" }, [getText() || ""]);
+  if (!isEdit) ta.setAttribute("readonly", "readonly");
+
+  const saveBtn = el("button", {
+    class: "btn btn-primary",
+    type: "button",
+    disabled: !isEdit,
+    onclick: () => { setText(ta.value || ""); closeModal(); }
+  }, ["Save"]);
+
+  const body = el("div", {}, [
+    el("div", { class: "label" }, [`Status ${stepIndex + 1} – Notes`]),
+    ta,
+    el("div", { class: "routines-notes-actions" }, isEdit ? [saveBtn] : []),
+  ]);
+
+  openModal({
+    title: "Notes",
+    sub: isEdit ? "Redigera notes för detta steg." : "Read-only.",
+    bodyNode: body,
+    showFooterClose: false,
+    onClose: () => closeModal(),
+  });
+}
+
+// ---- Rutiner: gemensamt UI för Ny / Redigera ----
+function openRoutineFormModal(state, mode) {
+  const routines = loadRoutines();
+  state.routines = state.routines || {};
+  const selectedId = state.routines.selectedId || routines[0]?.id;
+
+  if (mode === "edit" && !selectedId) { alert("Det finns inga rutiner att redigera."); return; }
+
+  const existing = mode === "edit" ? routines.find(r => r.id === selectedId) : null;
+  if (mode === "edit" && !existing) { alert("Kan inte hitta vald rutin."); return; }
+
+  const working = {
+    id: existing?.id || null,
+    namn: existing?.namn || "",
+    steg: (existing?.steg || []).map(s => ({ name: s.name || "", notes: s.notes || "" })),
+  };
+  if (mode === "new" && working.steg.length === 0) working.steg.push({ name: "", notes: "" });
+
+  const nameIn = el("input", { class: "input", value: working.namn, placeholder: "Rutinens namn" }, []);
+  nameIn.addEventListener("input", () => { working.namn = nameIn.value; });
+
+  const stepsWrap = el("div", { class: "routines-steps-edit" }, []);
+
+  function renderSteps() {
+    stepsWrap.innerHTML = "";
+    working.steg.forEach((step, idx) => {
+      const stepName = el("input", { class: "input", value: step.name, placeholder: `Status ${idx + 1} namn` }, []);
+      stepName.addEventListener("input", () => { working.steg[idx].name = stepName.value; });
+
+      const notesBtn = el("button", {
+        class: "icon-btn routines-notes-btn",
+        type: "button",
+        title: "Notes",
+        onclick: () => openRoutineStepNotesModal({
+          mode: "admin-edit",
+          stepIndex: idx,
+          getText: () => working.steg[idx].notes || "",
+          setText: (t) => { working.steg[idx].notes = t; }
+        })
+      }, ["📝"]);
+
+      const rowTop = el("div", { class: "routines-step-edit-row" }, [stepName, notesBtn]);
+
+      const removeBtn = el("button", {
+        class: "btn btn-small",
+        type: "button",
+        onclick: () => { working.steg.splice(idx, 1); renderSteps(); }
+      }, ["Ta bort steg"]);
+
+      stepsWrap.appendChild(el("div", { class: "card", style: "padding:10px;" }, [
+        el("div", { class: "label" }, [`Status ${idx + 1}`]),
+        rowTop,
+        el("div", { style: "display:flex;justify-content:flex-end;margin-top:8px;" }, [removeBtn])
+      ]));
+    });
+  }
+
+  const addBtn = el("button", {
+    class: "btn btn-small",
+    type: "button",
+    onclick: () => { working.steg.push({ name: "", notes: "" }); renderSteps(); }
+  }, ["+ Lägg till steg"]);
+
+  const saveBtn = el("button", {
+    class: "btn btn-primary",
+    type: "button",
+    onclick: () => {
+      const name = (working.namn || "").trim();
+      if (!name) { alert("Ange namn för rutinen."); return; }
+
+      const steps = (working.steg || [])
+        .map(s => ({ name: (s.name || "").trim(), notes: (s.notes || "").toString() }))
+        .filter(s => s.name.length > 0);
+
+      if (!steps.length) { alert("Rutinen måste ha minst ett steg."); return; }
+
+      const id = working.id || ("r_" + Math.random().toString(16).slice(2) + Date.now().toString(16));
+      const updated = { id, namn: name, steg: steps };
+
+      const i = routines.findIndex(r => r.id === id);
+      if (i >= 0) routines[i] = updated; else routines.push(updated);
+
+      saveRoutines(routines);
+      state.routines.selectedId = id;
+
+      closeModal();
+      render(state);
+    }
+  }, ["Save"]);
+
+  renderSteps();
+
+  openModal({
+    title: mode === "new" ? "Ny rutin" : "Redigera rutin",
+    bodyNode: el("div", {}, [
+      el("div", { class: "label" }, ["Namn"]),
+      nameIn,
+      el("div", { style: "display:flex;justify-content:space-between;align-items:center;margin-top:10px;" }, [
+        el("div", { class: "label" }, ["Status"]),
+        addBtn
+      ]),
+      stepsWrap,
+      el("div", { class: "routines-new-actions" }, [saveBtn])
+    ]),
+    showFooterClose: false,
+    onClose: () => { closeModal(); render(state); }
+  });
+}
+
+  
+  function openRoutineViewerModal(state, routine) {
+    const steps = Array.isArray(routine?.steg) ? routine.steg : [];
+    const body = el("div", { style: "display:flex;flex-direction:column;gap:10px;" }, [
+      el("div", { style: "font-size:13px;color:#6b7280;" }, [`Visar ${steps.length} steg (read-only)`]),
+      ...steps.map((s, i) => {
+        const row = el("div", { class: "viewer-step" }, []);
+        row.appendChild(el("div", { class: "viewer-step-index" }, [`Status ${i+1}`]));
+        row.appendChild(el("input", { class: "input", value: (s?.name || "").toString(), readonly: true }));
+        return row;
+      }),
+    ]);
+    openModal({
+      title: routine?.namn ? `Rutin: ${routine.namn}` : "Rutin",
+      sub: "Status (read-only)",
+      bodyNode: body
+    });
+  }
+
+
+function renderRoutinesTab(state, user) {
+    const view = document.getElementById("view");
+    view.innerHTML = "";
+
+    const routines = loadRoutines();
+    ensureRoutinesSelected(state, routines);
+
+    if (!routines.length) {
+      view.appendChild(el("div", { class: "card", style: "padding:12px;" }, [
+        el("div", { style: "font-weight:900;margin-bottom:6px;" }, ["Inga rutiner ännu"]),
+        el("div", { style: "color: rgba(17,24,39,.7);font-size:13px;" }, [
+          user?.role === "admin"
+            ? "Skapa en rutin med knappen “Ny rutin”."
+            : "Be en admin skapa en rutin."
+        ])
+      ]));
+      return;
+    }
+
+    const table = el("table", { class: "table table-compact routines-ui" }, []);
+    const thead = el("thead", {}, []);
+    const headRow = el("tr", {}, []);
+    headRow.appendChild(el("th", {}, ["Namn"]));
+    for (let i = 1; i <= 5; i++) headRow.appendChild(el("th", {}, [`Status ${i}`]));
+    // Admin only: delete column
+    headRow.appendChild(el("th", {}, [""]));
+    thead.appendChild(headRow);
+
+    const tbody = el("tbody", {}, []);
+
+    routines.forEach((routine) => {
+      const tr = el("tr", {}, []);
+
+      // Namn (admin: klickbar för redigera)
+      if (user?.role === "admin") {
+        const nameBtn = el("button", {
+          class: "link-btn",
+          type: "button",
+          title: `Redigera rutin: ${routine.namn || ""}`,
+          onclick: () => openRoutineEditorModal(state, { mode: "edit", routineId: routine.id }),
+        }, [truncateText(routine.namn || "", 32).short]);
+
+        tr.appendChild(el("td", { class: "routines-name-cell" }, [
+          el("div", { style: "display:flex;align-items:center;gap:8px;" }, [
+            nameBtn,
+          ])
+        ]));
+      } else {
+        tr.appendChild(el("td", { class: "routines-name-cell" }, [
+          (() => { const tn = truncateText(routine.namn || "", 32); return el("div", { style: "font-weight:900;", title: tn.truncated ? tn.full : "" }, [tn.short]); })()
+        ]));
+      }
+
+      const steps = Array.isArray(routine.steg) ? routine.steg : [];
+      const overflow = Math.max(0, steps.length - 5);
+
+      // Status 1–6
+      for (let i = 0; i < 4; i++) {
+        const step = steps[i] || null;
+
+        const t = truncateText((step?.name || "").toString(), 26);
+        const stepName = el("input", {
+          class: "input",
+          value: t.short,
+          title: t.truncated ? t.full : "",
+          readonly: true,
+          style: "min-width:140px;",
+        });
+
+        const notesBtn = step
+          ? el("button", {
+              class: "comment-icon",
+              type: "button",
+              title: "Notes",
+              onclick: () => openNotesModal({ state, routineId: routine.id, stepIndex: i, role: user?.role || "user" }),
+            }, ["📝"])
+          : el("span", { style: "width:24px;display:inline-block;" }, [""]);
+
+        tr.appendChild(el("td", {}, [
+          el("div", { class: "act-cell" }, [stepName, notesBtn]),
+        ]));
+      }
+
+      // Status 5 (sista)
+      if (overflow > 0) {
+        const step7 = steps[4] || null;
+
+        const t7 = truncateText((step7?.name || "").toString(), 26);
+
+        const stepName = el("input", {
+          class: "input",
+          value: t7.short,
+          title: t7.truncated ? t7.full : "",
+          readonly: true,
+          style: "min-width:140px;",
+        });
+
+        const moreBtn = el("button", {
+          class: "btn btn-more",
+          type: "button",
+          title: "Visa alla steg",
+          onclick: () => openRoutineViewerModal(state, routine),
+        }, [`+${overflow}`]);
+
+        tr.appendChild(el("td", {}, [
+          el("div", { class: "act-cell" }, [stepName, moreBtn]),
+        ]));
+      } else {
+        const step = steps[4] || null;
+
+        const t = truncateText((step?.name || "").toString(), 26);
+        const stepName = el("input", {
+          class: "input",
+          value: t.short,
+          title: t.truncated ? t.full : "",
+          readonly: true,
+          style: "min-width:140px;",
+        });
+
+        const notesBtn = step
+          ? el("button", {
+              class: "comment-icon",
+              type: "button",
+              title: "Notes",
+              onclick: () => openNotesModal({ state, routineId: routine.id, stepIndex: 4, role: user?.role || "user" }),
+            }, ["📝"])
+          : el("span", { style: "width:24px;display:inline-block;" }, [""]);
+
+        tr.appendChild(el("td", {}, [
+          el("div", { class: "act-cell" }, [stepName, notesBtn]),
+        ]));
+      }
+
+      // Delete (admin only)
+      const delTd = el("td", {}, []);
+      if (user?.role === "admin") {
+        const delBtn = el("button", {
+          class: "icon-btn trash-btn",
+          type: "button",
+          title: "Ta bort rutin",
+          onclick: () => {
+            const ok = confirm(`Ta bort rutin “${routine.namn || ""}”?`);
+            if (!ok) return;
+            const next = loadRoutines().filter((r) => r.id !== routine.id);
+            saveRoutines(next);
+            ensureRoutinesSelected(state, next);
+            render(state);
+          }
+        }, ["🗑"]);
+        delTd.appendChild(delBtn);
+      }
+      tr.appendChild(delTd);
+
+      tbody.appendChild(tr);
+    });
+
+    table.appendChild(thead);
+    table.appendChild(tbody);
+    view.appendChild(table);
+  }
+
+
+  function openNotesModal({ state, routineId, stepIndex, role }) {
+    const routines = loadRoutines();
+    const rIndex = routines.findIndex(r => r.id === routineId);
+    if (rIndex < 0) return;
+    const routine = routines[rIndex];
+    const step = (routine.steg || [])[stepIndex] || {};
+
+    const isAdmin = role === "admin";
+
+    const textarea = el("textarea", {
+      class: "input",
+      style: "width:100%; min-height: 220px; resize: vertical;",
+    }, []);
+    textarea.value = (step.notes || "").toString();
+    textarea.readOnly = !isAdmin;
+
+    const actions = el("div", { style: "display:flex; gap:10px; justify-content:flex-end; margin-top: 10px;" }, []);
+    if (isAdmin) {
+      actions.appendChild(el("button", {
+        class: "btn btn-primary",
+        type: "button",
+        onclick: () => {
+          // persist safely
+          const routines2 = loadRoutines();
+          const ri = routines2.findIndex(r => r.id === routineId);
+          if (ri < 0) return closeModal();
+          const r2 = routines2[ri];
+          r2.steg = r2.steg || [];
+          r2.steg[stepIndex] = r2.steg[stepIndex] || {};
+          r2.steg[stepIndex].notes = textarea.value;
+          saveRoutines(routines2);
+          closeModal();
+          render(state);
+        }
+      }, ["Save"]));
+    }
+
+    const body = el("div", {}, [
+      el("div", { class: "label" }, ["Notes"]),
+      textarea,
+      actions
+    ]);
+
+    openModal({
+      title: `${routine.namn || "Rutin"} – Status ${stepIndex + 1}`,
+      sub: isAdmin ? "Skriv anteckningar och tryck Save." : "Read-only.",
+      bodyNode: body,
+      showFooterClose: false,
+      onClose: () => { closeModal(); render(state); },
+    });
+  }
+
+  
+  
+  
+  function openRoutineEditorModal(state, { mode = "new", routineId = null } = {}) {
+    const routines = loadRoutines();
+
+    const existing = (mode === "edit" && routineId)
+      ? routines.find(r => r.id === routineId)
+      : null;
+
+    if (mode === "edit" && !existing) {
+      alert("Kan inte hitta rutinen att redigera.");
+      return;
+    }
+
+    const working = existing
+      ? {
+          id: existing.id,
+          namn: existing.namn || "",
+          steg: (existing.steg || []).map(s => ({ name: s?.name || "", notes: s?.notes || "" })),
+        }
+      : {
+          id: uid("routine"),
+          namn: "",
+          steg: [],
+        };
+
+    const nameIn = el("input", { class: "input", value: working.namn, placeholder: "Rutinens namn" }, []);
+    nameIn.addEventListener("input", () => { working.namn = nameIn.value; });
+
+    // Ny rutin: skapa X steg
+    const countIn = el("input", { class: "input", type: "number", min: 1, max: 50, value: 5, style: "max-width:110px;" }, []);
+    const genBtn = el("button", { class: "btn", type: "button" }, ["Skapa"]);
+    const addBtn = el("button", { class: "btn", type: "button" }, ["+ Lägg till steg"]);
+
+    const stepsViewport = el("div", {
+      style: "border:1px solid #e5e7eb;border-radius:14px;padding:10px;overflow:auto;max-height:46vh;background:#fff;"
+    }, []);
+    const stepsList = el("div", { style: "display:flex;flex-direction:column;gap:8px;" }, []);
+    stepsViewport.appendChild(stepsList);
+
+    function renderSteps() {
+      stepsList.innerHTML = "";
+
+      if (!working.steg.length) {
+        stepsList.appendChild(el("div", { style: "font-size:13px;color:#6b7280;padding:6px 0;" }, [
+          mode === "new"
+            ? "Skapa steg med Antal steg + Skapa, eller lägg till manuellt."
+            : "Lägg till ett steg."
+        ]));
+        return;
+      }
+
+      working.steg.forEach((step, idx) => {
+        const name = el("input", {
+          class: "input",
+          value: step.name,
+          placeholder: `Status ${idx + 1} namn`,
+        }, []);
+        name.addEventListener("input", () => { working.steg[idx].name = name.value; });
+
+        const notesBtn = el("button", {
+          class: "comment-icon",
+          type: "button",
+          title: step.notes ? "Notes (finns)" : "Notes (tom)",
+          onclick: () => {
+            const ta = el("textarea", { class: "textarea", rows: 8 }, [working.steg[idx].notes || ""]);
+            const save = el("button", { class: "btn btn-primary", type: "button" }, ["Save"]);
+            save.addEventListener("click", () => {
+              working.steg[idx].notes = ta.value || "";
+              closeModal();
+              openRoutineEditorModal(state, { mode, routineId: working.id });
+            });
+            openModal({
+              title: `Notes – Status ${idx + 1}`,
+              sub: "Admin",
+              bodyNode: el("div", { style: "display:flex;flex-direction:column;gap:10px;" }, [
+                ta,
+                el("div", { style: "display:flex;justify-content:flex-end;" }, [save]),
+              ]),
+              showFooterClose: true,
+            });
+          }
+        }, ["📝"]);
+
+        const up = el("button", { class: "btn", type: "button", title: "Upp", style: "padding:6px 10px;border-radius:999px;" }, ["↑"]);
+        const down = el("button", { class: "btn", type: "button", title: "Ner", style: "padding:6px 10px;border-radius:999px;" }, ["↓"]);
+        up.addEventListener("click", () => {
+          if (idx === 0) return;
+          const tmp = working.steg[idx - 1];
+          working.steg[idx - 1] = working.steg[idx];
+          working.steg[idx] = tmp;
+          renderSteps();
+        });
+        down.addEventListener("click", () => {
+          if (idx === working.steg.length - 1) return;
+          const tmp = working.steg[idx + 1];
+          working.steg[idx + 1] = working.steg[idx];
+          working.steg[idx] = tmp;
+          renderSteps();
+        });
+
+        const del = el("button", { class: "icon-btn trash-btn", type: "button", title: "Ta bort steg" }, ["🗑"]);
+        del.addEventListener("click", () => {
+          const ok = confirm(`Ta bort Status ${idx + 1}?`);
+          if (!ok) return;
+          working.steg.splice(idx, 1);
+          renderSteps();
+        });
+
+        const row = el("div", { style: "display:grid;grid-template-columns:44px 1fr auto;gap:10px;align-items:center;" }, [
+          el("div", { style: "font-weight:900;color:#6b7280;text-align:center;" }, [`${idx + 1}`]),
+          name,
+          el("div", { style: "display:flex;gap:8px;align-items:center;" }, [notesBtn, up, down, del]),
+        ]);
+
+        stepsList.appendChild(row);
+      });
+    }
+
+    genBtn.addEventListener("click", () => {
+      const n = Math.max(1, Math.min(50, parseInt(countIn.value || "0", 10) || 0));
+      if (!n) { alert("Ange antal steg."); return; }
+      working.steg = Array.from({ length: n }).map((_, i) => ({ name: `Status ${i + 1}`, notes: "" }));
+      renderSteps();
+    });
+
+    addBtn.addEventListener("click", () => {
+      working.steg.push({ name: "", notes: "" });
+      renderSteps();
+    });
+
+    const cancelBtn = el("button", { class: "btn", type: "button" }, ["Cancel"]);
+    cancelBtn.addEventListener("click", () => closeModal());
+
+    const saveBtn = el("button", { class: "btn btn-primary", type: "button" }, ["Save"]);
+    saveBtn.addEventListener("click", () => {
+      const name = (working.namn || "").toString().trim();
+      if (!name) { alert("Ange namn för rutinen."); return; }
+
+      const steps = (working.steg || [])
+        .map(s => ({ name: (s.name || "").toString().trim(), notes: (s.notes || "").toString() }))
+        .filter(s => s.name.length > 0);
+
+      if (!steps.length) { alert("Rutinen måste ha minst ett steg."); return; }
+
+      const updated = { id: working.id, namn: name, steg: steps };
+      const idx = routines.findIndex(r => r.id === working.id);
+      if (idx >= 0) routines[idx] = updated;
+      else routines.push(updated);
+
+      saveRoutines(routines);
+      ensureRoutinesSelected(state, routines);
+
+      closeModal();
+      render(state);
+    });
+
+    renderSteps();
+
+    const topRow = el("div", { style: "display:flex;gap:14px;align-items:flex-end;flex-wrap:wrap;" }, [
+      el("div", { style: "flex:1;min-width:260px;" }, [
+        el("div", { class: "label" }, ["Namn"]),
+        nameIn,
+      ]),
+      mode === "new"
+        ? el("div", { style: "min-width:220px;" }, [
+            el("div", { class: "label" }, ["Antal steg"]),
+            el("div", { style: "display:flex;gap:10px;align-items:center;" }, [countIn, genBtn]),
+          ])
+        : el("div", { style: "width:220px;" }, [""]),
+    ]);
+
+    const stepsHeader = el("div", { style: "display:flex;justify-content:space-between;align-items:center;" }, [
+      el("div", { class: "label" }, ["Status"]),
+      el("div", { style: "display:flex;gap:10px;align-items:center;" }, [addBtn]),
+    ]);
+
+    const footer = el("div", { style: "display:flex;justify-content:flex-end;gap:10px;padding-top:6px;" }, [
+      cancelBtn,
+      saveBtn,
+    ]);
+
+    const body = el("div", { style: "display:flex;flex-direction:column;gap:12px;" }, [
+      topRow,
+      stepsHeader,
+      stepsViewport,
+      footer,
+    ]);
+
+    openModal({
+      title: mode === "new" ? "Ny rutin" : "Redigera rutin",
+      sub: mode === "new" ? "Ange namn och skapa steg." : "Ändra namn och steg. Notes via 📝.",
+      bodyNode: body,
+      showFooterClose: false,
+    });
+
+    // Force medium sizing without requiring CSS
+    const modal = document.querySelector(".modal");
+    if (modal) {
+      const content = modal.querySelector(".modal-content");
+      if (content) {
+        content.style.maxWidth = "860px";
+        content.style.width = "calc(100% - 40px)";
+        content.style.maxHeight = "80vh";
+        content.style.overflow = "hidden";
+      }
+    }
+  }
+function openNewRoutineModal(state) {
+    openRoutineEditorModal(state, { mode: "new" });
+  }
+
+  function openEditRoutineModal(state) {
+    const routines = loadRoutines();
+    const selectedId = ensureRoutinesSelected(state, routines);
+    if (!selectedId) {
+      alert("Det finns inga rutiner att redigera.");
+      return;
+    }
+    openRoutineEditorModal(state, { mode: "edit", routineId: selectedId });
+  }
+
   document.addEventListener("DOMContentLoaded", init);
-})();
 })();

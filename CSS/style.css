@@ -404,7 +404,7 @@ tr.is-expanded + tr .readonly-pill{
   background:rgba(15,16,22,.98);
   border:1px solid rgba(255,255,255,.14);
   border-radius:14px;
-  overflow:hidden;
+  overflow:visible;
   z-index:50;
   box-shadow:0 22px 60px rgba(0,0,0,.55);
 }
@@ -514,7 +514,7 @@ tr.is-expanded + tr .readonly-pill{
   margin-top:8px;
   border:1px solid rgba(255,255,255,.12);
   border-radius:12px;
-  overflow:hidden;
+  overflow:visible;
   background:rgba(0,0,0,.25);
 }
 .suggest button{
@@ -770,3 +770,726 @@ body{
   color:#fff;
   font-weight:900;
 }
+/* =========================
+   Manage user – compact layout
+========================= */
+.manage-users-wrap{
+  max-width: 460px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.manage-users-header{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:10px;
+  margin-bottom: 6px;
+}
+
+.manage-users-title{
+  font-weight: 1000;
+  font-size: 14px;
+  letter-spacing: .2px;
+}
+
+.btn.btn-small{
+  padding: 8px 12px;
+  font-size: 12px;
+}
+
+.manage-users-list{
+  display:flex;
+  flex-direction:column;
+  gap: 6px;
+}
+
+.manage-user-row{
+  display:flex;
+  align-items:center;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: rgba(255,255,255,.04);
+}
+
+.manage-user-row:hover{
+  background: rgba(255,255,255,.06);
+}
+
+.link-btn.manage-user-name{
+  flex: 1;
+  text-align: left;
+  cursor: pointer;
+  text-decoration: none;
+  padding: 6px 8px;
+  border-radius: 10px;
+  color: var(--text);
+}
+
+.link-btn.manage-user-name:hover{
+  background: rgba(255,255,255,.06);
+}
+
+.icon-btn.manage-user-delete{
+  padding: 6px 8px;
+}
+
+/* Slightly denser on small screens */
+@media (max-width: 520px){
+  .manage-users-wrap{ max-width: 100%; }
+  .manage-user-row{ padding: 6px; }
+}
+
+
+/* =========================
+   Rutiner (compact view)
+========================= */
+.routines-wrap{
+  max-width: 980px;
+  margin: 0 auto;
+  display:flex;
+  flex-direction:column;
+  gap: 12px;
+}
+.routines-top{
+  display:flex;
+  align-items:center;
+  gap: 10px;
+  flex-wrap:wrap;
+}
+.routines-select{
+  max-width: 420px;
+}
+.routines-empty{
+  padding: 14px;
+  border: 1px dashed var(--line);
+  border-radius: 14px;
+  color: var(--muted);
+}
+.routines-table th, .routines-table td{
+  vertical-align: top;
+}
+
+/* Rutiner – bättre spacing mellan Namn och Steg 1 */
+.routines-table thead th:first-child,
+.routines-table tbody td:first-child{
+  min-width: 170px;
+  padding-right: 26px;
+}
+
+/* Notes textarea (used in Rutiner modals) */
+.textarea{
+  width:100%;
+  padding:10px 10px;
+  border-radius:10px;
+  border:1px solid #d1d5db;
+  background:#ffffff;
+  color:#111827;
+  font-family: var(--font);
+  resize: vertical;
+}
+
+/* Rutiner – stegcell ser ut som edit UI */
+.routines-step-name-input{
+  font-size: 13px;
+  line-height: 1.25;
+}
+.routines-step-name-input[readonly]{
+  cursor: default;
+}
+.routines-name-cell{
+  font-weight: 700;
+  white-space: nowrap;
+}
+.routines-step-inner{
+  display:flex;
+  align-items:flex-start;
+  justify-content:space-between;
+  gap: 8px;
+}
+.routines-step-name{
+  font-size: 13px;
+  line-height: 1.25;
+  color: var(--text);
+}
+.notes-icon{
+  padding: 6px 8px;
+  border-radius: 10px;
+  flex: 0 0 auto;
+}
+.routines-notes-actions,
+.routines-new-actions{
+  margin-top: 12px;
+  display:flex;
+  justify-content:flex-end;
+  gap: 10px;
+}
+.routines-steps-edit{
+  display:flex;
+  flex-direction:column;
+  gap: 8px;
+  margin-top: 10px;
+}
+.routines-step-edit-row{
+  display:flex;
+  gap: 8px;
+  align-items:center;
+}
+.routines-step-edit-row .input{
+  flex: 1;
+}
+
+/* =========================
+   Rutiner – app_11 patch
+========================= */
+
+.routines-table thead th:first-child,
+.routines-table tbody td:first-child {
+  min-width: 170px;
+  padding-right: 26px;
+}
+
+/* Notes textarea */
+.textarea {
+  width: 100%;
+  padding: 10px;
+  border-radius: 10px;
+  border: 1px solid #d1d5db;
+  resize: vertical;
+}
+
+/* Steg-UI (samma känsla som edit) */
+.routines-step-name-input {
+  font-size: 13px;
+  line-height: 1.25;
+}
+.routines-step-name-input[readonly] {
+  cursor: default;
+}
+
+
+
+/* --- Utveckling: compact activity table UI --- */
+.dev-table thead th{ padding:8px 8px; }
+.dev-table tbody td{ padding:8px 8px; vertical-align:middle; }
+
+/* Tone down "Typ" */
+.dev-type{
+  font-size:12px;
+  font-weight:700;
+  opacity:.72;
+  text-transform:lowercase;
+}
+
+/* Compact pill inside development cells */
+.dev-table .up-active-cell{
+  padding:8px 12px;
+  font-size:13px;
+}
+
+/* Activity cell layout: keep comment close to Tasks */
+.act-cell{
+  display:inline-flex;
+  align-items:center;
+  gap:6px;
+}
+
+/* Comment icon: icon-only, no ring */
+.comment-icon{
+  background:transparent;
+  border:none;
+  padding:0;
+  cursor:pointer;
+  line-height:1;
+  font-size:16px;
+  opacity:.8;
+}
+.comment-icon:hover{ opacity:1; }
+
+/* Badge wrap should not add extra spacing */
+.icon-badge-wrap{ display:inline-flex; align-items:center; position:relative; }
+
+/* Trash: more subtle until hover */
+.dev-table .up-trash{ opacity:.45; }
+.dev-table .up-trash:hover{ opacity:1; }
+
+.badge{ position:absolute; top:-6px; right:-8px; font-size:11px; padding:2px 5px; border-radius:999px; background:#111; color:#fff; line-height:1; }
+
+.type-col select{ font-size:13px; padding:6px 10px; }
+
+
+/* Archive / DONE polish */
+.btn.btn-done{
+  padding: 8px 12px;
+  font-weight: 900;
+  border-radius: 999px;
+  border: 1px solid #e5e7eb;
+  background: #fff;
+}
+.btn.btn-done:hover{ border-color:#cbd5e1; }
+
+.archive-card{
+  padding:10px;
+  border:1px solid #e5e7eb;
+  border-radius:12px;
+  background:#fff;
+  display:flex;
+  flex-direction:column;
+  gap:6px;
+}
+
+/* ToDo week display (read-only) */
+.week-display{ display:flex; align-items:center; cursor:default; user-select:none; }
+
+
+/* Shared compact density for tables (Dev/Product/Rutiner) */
+.table.table-compact th,
+.table.table-compact td{
+  padding-top:6px;
+  padding-bottom:6px;
+}
+
+/* Rutiner table: make space between Namn and Steg 1 */
+.table.routines-ui th:first-child,
+.table.routines-ui td:first-child{
+  min-width:260px;
+  padding-right:18px;
+}
+
+
+/* Rutiner: +X button */
+.btn.btn-more{
+  padding: 8px 12px;
+  border-radius: 999px;
+  border: 1px solid #e5e7eb;
+  background: #fff;
+  font-weight: 900;
+}
+.btn.btn-more:hover{ border-color:#cbd5e1; }
+
+/* Viewer modal rows */
+.viewer-step{
+  display:flex;
+  gap:10px;
+  align-items:center;
+}
+.viewer-step-index{
+  width:70px;
+  font-size:12px;
+  color:#6b7280;
+  font-weight:700;
+}
+
+/* Rutiner: bredare stegkolumner */
+.table.routines-ui td .input{
+  min-width:180px;
+}
+
+
+/* =========================
+   Manage register – compact layout
+   ========================= */
+.manage-reg-wrap{
+  max-width: 820px;
+  margin: 0 auto;
+  display:flex;
+  flex-direction:column;
+  gap: 10px;
+}
+
+.reg-toolbar{
+  display:flex;
+  align-items:center;
+  gap: 8px;
+  flex-wrap:wrap;
+  margin-bottom: 2px;
+}
+
+.reg-select{ max-width: 240px; }
+
+.reg-toolbar-actions{
+  display:flex;
+  gap: 8px;
+  align-items:center;
+}
+
+.reg-hint{
+  font-size: 12px;
+  color: #6b7280;
+  margin-top: -4px;
+}
+
+.reg-list{
+  display:flex;
+  flex-direction:column;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.reg-row{
+  display:flex;
+  align-items:center;
+  gap: 6px;
+}
+
+.reg-row .input{ flex: 1; }
+
+.reg-add-row{
+  display:flex;
+  align-items:center;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+
+
+
+/* -------------------------------------------------
+   USP Activity Field – unified brick
+   ------------------------------------------------- */
+
+.act-field{
+  position:relative;
+  height:36px;
+  border-radius:10px;
+  padding:6px 10px;
+  display:flex;
+  align-items:center;
+  gap:10px;
+  background:#f9fafb;
+  border:1px solid #e5e7eb;
+  overflow:visible;
+}
+
+.act-status-corner{
+  position:absolute;
+  top:-8px;
+  left:-8px;
+  width:18px;
+  height:18px;
+  border-radius:50%;
+  background: inherit; /* match field color */
+  border:3px solid currentColor; /* sharp, matching edge */
+  cursor:pointer;
+}
+
+.act-field.status-green{ background:#ecfdf5; }
+.act-field.status-yellow{ background:#fffbeb; }
+.act-field.status-red{ background:#fef2f2; }
+
+.act-field.status-green .act-status-corner{
+  position:absolute;
+  top:-8px;
+  left:-8px;
+  width:18px;
+  height:18px;
+  border-radius:50%;
+  background: inherit; /* match field color */
+  border:3px solid currentColor; /* sharp, matching edge */
+  cursor:pointer;
+}
+.act-field.status-yellow .act-status-corner{
+  position:absolute;
+  top:-8px;
+  left:-8px;
+  width:18px;
+  height:18px;
+  border-radius:50%;
+  background: inherit; /* match field color */
+  border:3px solid currentColor; /* sharp, matching edge */
+  cursor:pointer;
+}
+.act-field.status-red .act-status-corner{
+  position:absolute;
+  top:-8px;
+  left:-8px;
+  width:18px;
+  height:18px;
+  border-radius:50%;
+  background: inherit; /* match field color */
+  border:3px solid currentColor; /* sharp, matching edge */
+  cursor:pointer;
+}
+
+.act-value{
+  font-size:14px;
+  white-space:nowrap;
+  overflow:visible;
+  text-overflow:ellipsis;
+  color:#111827;
+}
+
+.act-status-only{
+  width:100%;
+}
+
+.act-value-input{
+  width:100%;
+  border:0;
+  outline:0;
+  background:transparent;
+  font-size:14px;
+  color:#111827;
+}
+
+.act-date-wrap{
+  position:relative;
+  width:100%;
+  min-width:0;
+}
+
+.act-date-display{
+  user-select:none;
+  cursor:pointer;
+  width:100%;
+  display:block;
+}
+
+.act-date-picker{
+  position:absolute;
+  inset:0;
+  opacity:0;
+  cursor:pointer;
+  pointer-events:none; /* let the visible display capture the click */
+}
+
+.owner-badge{
+  min-width:28px;
+  text-align:center;
+  font-weight:800;
+  font-size:12px;
+  color:#6b7280;
+  cursor:pointer;
+  padding:2px 6px;
+  border-radius:999px;
+  background:rgba(255,255,255,0.65);
+  border:1px solid rgba(17,24,39,0.12);
+}
+
+.owner-badge.has-notes{
+  color:#1d4ed8;
+  border-color: rgba(29,78,216,0.35);
+}
+
+
+
+
+
+/* --- USP tweak: bigger status corner marker (outside brick) --- */
+.act-status-corner{
+  position:absolute;
+  top:-8px;
+  left:-8px;
+  width:18px;
+  height:18px;
+  border-radius:50%;
+  background: inherit; /* match field color */
+  border:3px solid currentColor; /* sharp, matching edge */
+  cursor:pointer;
+}
+
+
+/* P-typ dropdown – more unified */
+.ptype-select{
+  height:36px;
+  border-radius:999px;
+  padding:0 12px;
+  border:1px solid #e5e7eb;
+  background:#fff;
+  font-weight:800;
+}
+
+
+/* Row action dropdown */
+.row-actions{ position:relative; display:flex; justify-content:flex-end; }
+.action-btn{ min-width:88px; }
+.action-menu{
+  position:absolute;
+  top:42px;
+  right:0;
+  background:#fff;
+  border:1px solid #e5e7eb;
+  border-radius:12px;
+  box-shadow:0 10px 25px rgba(0,0,0,.08);
+  padding:6px;
+  display:flex;
+  flex-direction:column;
+  gap:4px;
+  z-index:50;
+}
+.action-menu.hidden{ display:none; }
+.action-item{
+  border:0;
+  background:transparent;
+  padding:8px 10px;
+  border-radius:10px;
+  text-align:left;
+  cursor:pointer;
+  font-weight:800;
+}
+.action-item:hover{ background:#f3f4f6; }
+.action-item.danger{ color:#dc2626; }
+
+
+/* -------------------------------------------------
+   Polishing: activity bricks + action menu + selects
+   ------------------------------------------------- */
+
+.table td{ vertical-align: middle; overflow: visible; }
+
+/* Brick border + spacing */
+.act-field{
+  border: 1px solid #e5e7eb;
+  overflow: visible; /* make sure corner marker is never clipped */
+}
+
+/* Corner marker: true circle, larger click area, outside brick */
+.act-status-corner{
+  top: -10px;
+  left: -10px;
+  width: 20px;
+  height: 20px;
+  border-radius: 999px;
+}
+
+/* Inputs inside bricks should not look like separate boxes */
+.act-value-input{
+  width: 100%;
+  height: 24px;
+  border: 0;
+  outline: none;
+  background: transparent;
+  padding: 0;
+  margin: 0;
+  font-size: 14px;
+}
+
+/* Date/week widgets */
+.act-date-wrap{
+  position: relative;
+  width: 100%;
+  min-width: 0;
+}
+.act-date-display{
+  cursor: pointer;
+  user-select: none;
+}
+.act-date-picker{
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  padding: 0;
+  margin: 0;
+}
+
+/* P-typ dropdown as pill (override generic .select styles) */
+.select.ptype-select,
+.input.ptype-select{
+  height: 36px;
+  border-radius: 999px;
+  padding: 0 12px;
+  border: 1px solid #e5e7eb;
+  background: #fff;
+  font-weight: 800;
+}
+
+/* Action menu: always vertical and compact */
+.action-menu{ min-width: 140px; }
+.action-item{
+  display: block;
+  width: 100%;
+}
+
+
+/* Make status/text fields a bit shorter to free space */
+td .act-field.act-type-status{ width: 120px; }
+td .act-field.act-type-text{ width: 160px; }
+td .act-field.act-type-status .act-value{ width: 100%; }
+td .act-field.act-type-text .act-value-input{ width: 100%; }
+/* --- USP fix: corner marker should be solid, sharp status color (no ring) --- */
+.act-status-corner{
+  border: 0 !important;
+  background: #9ca3af; /* default neutral */
+}
+
+/* Solid status colors */
+.act-field.status-green .act-status-corner{ background:#22c55e !important; }
+.act-field.status-yellow .act-status-corner{ background:#f59e0b !important; }
+.act-field.status-red .act-status-corner{ background:#ef4444 !important; }
+
+/* --- USP fix: make text activity fields easy to click (focus input) --- */
+.act-field.act-type-text{ cursor:text; }
+.act-field.act-type-text .act-value-input{
+  height:100%;
+  min-height:24px;
+  display:block;
+}
+/* --- USP ToDo: Comment icon --- */
+.todo-comment-icon{
+  position: relative;
+}
+
+.todo-comment-icon::before{
+  content: "💬";
+  font-size: 16px;
+  color: #9ca3af;
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+}
+/* --- USP ToDo: Notes vs Comment icons --- */
+.todo-notes-icon::before{
+  content: "📝";
+  font-size: 16px;
+  color: #9ca3af;
+  position:absolute;
+  top:50%;
+  left:50%;
+  transform:translate(-50%,-50%);
+}
+
+.todo-comment-icon::before{
+  content: "💬";
+  font-size: 16px;
+  color: #9ca3af;
+  position:absolute;
+  top:50%;
+  left:50%;
+  transform:translate(-50%,-50%);
+}
+
+/* --- USP ToDo: Notes + Comment indicators & badges --- */
+.pill-badge-wrap{ display:inline-flex; align-items:center; position:relative; }
+
+/* Notes pill styling (neutral vs has notes) */
+.pill-notes{
+  background: transparent;
+  color:#111 !important;
+  border:2px solid #cbd5e1;
+  padding:10px 18px;
+}
+.pill-notes.is-notes{
+  background:#dcfce7;
+  border-color:#86efac;
+}
+
+/* Comment icon indicator when it has comments */
+.todo-comment-icon.has-comments{
+  background:#dcfce7;
+  border:1px solid #86efac;
+}
+.todo-comment-icon.has-comments::before{
+  color:#16a34a;
+}
+
+/* Keep badge readable on light backgrounds */
+.badge{ box-shadow:0 1px 0 rgba(0,0,0,.12); }
