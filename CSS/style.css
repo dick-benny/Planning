@@ -1493,3 +1493,24 @@ td .act-field.act-type-text .act-value-input{ width: 100%; }
 
 /* Keep badge readable on light backgrounds */
 .badge{ box-shadow:0 1px 0 rgba(0,0,0,.12); }
+
+/* --- USP: Mina sidor (ToDo overview) scrollbar --- */
+.mina-sidor-modal{
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.mina-sidor-content{
+  overflow-y: auto;
+  padding-right: 8px; /* room for scrollbar */
+}
+
+/* Optional nicer scrollbar */
+.mina-sidor-content::-webkit-scrollbar{
+  width: 8px;
+}
+.mina-sidor-content::-webkit-scrollbar-thumb{
+  background: #d1d5db;
+  border-radius: 8px;
+}

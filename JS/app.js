@@ -463,19 +463,17 @@ function openActivityNotesModal(state, entryOrRow, activity, user) {
     // Men om vi hittade något i data, spara det i registret så dropdown fungerar direkt.
     state.devTypes = merged;
 
-    // Rensa legacy-nycklar (så vi inte får dubbla källor)
+    // Rensa vissa legacy-nycklar (men behåll register/registers.* så att andra delar av appen kan läsa dem)
     delete state.dev_types;
     delete state.dev_type;
     delete state.devType;
     delete state.devtype;
-    if (state.register) {
-      delete state.register.devTypes;
-      delete state.register.dev_type;
-    }
-    if (state.registers) {
-      delete state.registers.devTypes;
-      delete state.registers.dev_type;
-    }
+
+    // Spegla alltid devTypes in i register/registers för bakåtkompatibilitet
+    state.register = state.register || {};
+    state.registers = state.registers || {};
+    state.register.dev_type = Array.isArray(state.devTypes) ? state.devTypes.slice() : [];
+    state.registers.dev_type = Array.isArray(state.devTypes) ? state.devTypes.slice() : [];
   }
 
   function isTypeActivity(activity) {
@@ -1454,6 +1452,13 @@ function renderManageUsers(current) {
     const body = el("div", {});
 
     function saveAndRerender() {
+      // Ensure devTypes are mirrored for all consumers
+      ensureDevTypes(state);
+      state.register = state.register || {};
+      state.registers = state.registers || {};
+      state.register.dev_type = Array.isArray(state.devTypes) ? state.devTypes.slice() : [];
+      state.registers.dev_type = Array.isArray(state.devTypes) ? state.devTypes.slice() : [];
+
       saveState(state);
       renderActive();
     }
@@ -2800,6 +2805,8 @@ acts.forEach((a) => {
       value: pickVal,
       class: "act-date-picker",
     });
+    // Ensure clicks go to the visible display/wrap (works even if CSS lacks pointer-events:none)
+    picker.style.pointerEvents = "none";
 
     shown.addEventListener("click", () => {
       if (typeof picker.showPicker === "function") picker.showPicker();
@@ -2807,9 +2814,7 @@ acts.forEach((a) => {
     });
 
     // Make the whole date field area clickable (not just the text)
-    wrap.addEventListener("click", (e) => {
-      // ignore direct clicks on the hidden input (if it ever receives pointer events)
-      if (e.target === picker) return;
+    wrap.addEventListener("click", () => {
       if (typeof picker.showPicker === "function") picker.showPicker();
       else { picker.focus(); picker.click(); }
     });
@@ -2836,6 +2841,8 @@ acts.forEach((a) => {
       value: cell.value ?? "",
       class: "act-date-picker",
     });
+    // Ensure clicks go to the visible display/wrap (works even if CSS lacks pointer-events:none)
+    picker.style.pointerEvents = "none";
 
     shown.addEventListener("click", () => {
       if (typeof picker.showPicker === "function") picker.showPicker();
@@ -3112,7 +3119,7 @@ const tbody = el("tbody");
       placeholder: "",
       oninput: (e) => { cell.value = e.target.value; saveState(state); },
     });
-  } else if (at === "veckokalender") {
+  } else if (at === "veckokalender" || at === "veckonummer" || at === "weeknumber" || at === "weekcalendar") {
     // Week picker: store ISO week key (YYYY-WNN) and show as "vNN". Default: ---
     const wrap = el("div", { class: "act-date-wrap" });
 
@@ -3128,6 +3135,8 @@ const tbody = el("tbody");
       value: (cell.date || "").toString(),
       class: "act-date-picker",
     });
+    // Ensure clicks go to the visible display/wrap (works even if CSS lacks pointer-events:none)
+    picker.style.pointerEvents = "none";
 
     shown.addEventListener("click", () => {
       if (typeof picker.showPicker === "function") picker.showPicker();
@@ -3155,6 +3164,8 @@ const tbody = el("tbody");
       value: cell.value ?? "",
       class: "act-date-picker",
     });
+    // Ensure clicks go to the visible display/wrap (works even if CSS lacks pointer-events:none)
+    picker.style.pointerEvents = "none";
 
     shown.addEventListener("click", () => {
       if (typeof picker.showPicker === "function") picker.showPicker();
