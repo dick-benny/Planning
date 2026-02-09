@@ -1138,10 +1138,101 @@ s.devTypes =
 
 function doLogout() { clearSession(); location.reload(); }
 
+    // -------------------------------
+    // Export / Import (localStorage migration)
+    // -------------------------------
+    function exportAppData() {
+      try {
+        const keys = [STORAGE_KEY_V16, AUTH_USERS_KEY, AUTH_SESSION_KEY, ROUTINES_KEY, STORAGE_KEY_V15];
+        const data = {};
+        keys.forEach((k) => {
+          const v = localStorage.getItem(k);
+          if (v !== null && v !== undefined) data[k] = v; // keep as raw string
+        });
+
+        const payload = {
+          schema: "usp-export-v1",
+          exportedAt: new Date().toISOString(),
+          keys: data,
+        };
+
+        const yyyy = new Date().getFullYear();
+        const mm = String(new Date().getMonth() + 1).padStart(2, "0");
+        const dd = String(new Date().getDate()).padStart(2, "0");
+        const filename = `usp-export-${yyyy}-${mm}-${dd}.json`;
+
+        const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json;charset=utf-8" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+
+        alert("Export klar. Filen laddades ner till din dator (oftast Hämtade filer/Downloads).");
+      } catch (e) {
+        console.error(e);
+        alert("Export misslyckades.");
+      }
+    }
+
+    function importAppData() {
+      const input = document.createElement("input");
+      input.type = "file";
+      input.accept = "application/json";
+      input.style.display = "none";
+      document.body.appendChild(input);
+
+      input.addEventListener("change", async () => {
+        try {
+          const file = input.files && input.files[0];
+          if (!file) return;
+
+          const text = await file.text();
+          const payload = JSON.parse(text);
+
+          if (!payload || (payload.schema !== "usp-export-v1" && !payload.keys)) {
+            alert("Filen ser inte ut som en USP-export.");
+            return;
+          }
+
+          const keys = payload.keys || {};
+          const willOverwrite = Object.keys(keys).length > 0;
+          if (!willOverwrite) {
+            alert("Inget att importera i filen.");
+            return;
+          }
+
+          const ok = confirm("Importera och skriva över lokal data för den här sajten?");
+          if (!ok) return;
+
+          Object.keys(keys).forEach((k) => {
+            const v = keys[k];
+            if (v === null || v === undefined) localStorage.removeItem(k);
+            else localStorage.setItem(k, String(v));
+          });
+
+          alert("Import klar. Sidan laddas om.");
+          location.reload();
+        } catch (e) {
+          console.error(e);
+          alert("Import misslyckades. Kontrollera att filen är korrekt JSON.");
+        } finally {
+          input.remove();
+        }
+      });
+
+      input.click();
+    }
+
     menu.innerHTML = "";
     menu.appendChild(item("Mina sidor", openMyPages));
     if (user?.role === "admin") menu.appendChild(item("Manage user", openManageUsers));
     if (user?.role === "admin") menu.appendChild(item("Register", openManageRegisters));
+    if (user?.role === "admin") menu.appendChild(item("Export data", exportAppData));
+    if (user?.role === "admin") menu.appendChild(item("Import data", importAppData));
     
     if (user?.role === "admin") menu.appendChild(item("Change user", () => doSwitchUser("Benny")));
     if (user?.role !== "admin" && (user?.username || "").toLowerCase() === "benny") menu.appendChild(item("Change user", () => doSwitchUser("Dick")));
