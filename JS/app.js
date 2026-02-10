@@ -78,6 +78,109 @@
   // APP STORAGE
   // -------------------------------
   const STORAGE_KEY_V16 = "up_planning_v16";
+
+  // -------------------------------
+  // Remote storage (Supabase) - optional
+  // NOTE: This uses a publishable key (OK for frontend) but requires proper RLS policies in Supabase.
+  // -------------------------------
+  const SUPABASE_URL = "https://nchgudsqleylfdysgabi.supabase.co";
+  const SUPABASE_KEY = "sb_publishable_TBIHlzs-Cw-fJfjUvkzzfw_mhrTLuLw";
+  const SUPABASE_TABLE = "usp_state";      // create this table in Supabase
+  const SUPABASE_ROW_KEY = "main";         // single shared row (temporary; later per-org/per-user)
+
+  const IS_LOCAL_DEV = ["localhost", "127.0.0.1"].includes(location.hostname);
+  const REMOTE_ENABLED_DEFAULT = !IS_LOCAL_DEV;
+
+  let _supabaseClient = null;
+  let _supabaseReady = null;
+
+  function ensureSupabase() {
+    if (_supabaseReady) return _supabaseReady;
+
+    _supabaseReady = new Promise((resolve) => {
+      if (window.supabase && typeof window.supabase.createClient === "function") {
+        _supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+        resolve(_supabaseClient);
+        return;
+      }
+
+      const s = document.createElement("script");
+      s.src = "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js";
+      s.async = true;
+      s.onload = () => {
+        if (window.supabase && typeof window.supabase.createClient === "function") {
+          _supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+          resolve(_supabaseClient);
+        } else {
+          console.warn("Supabase script loaded but client not available.");
+          resolve(null);
+        }
+      };
+      s.onerror = () => {
+        console.warn("Could not load Supabase client (offline?).");
+        resolve(null);
+      };
+      document.head.appendChild(s);
+    });
+
+    return _supabaseReady;
+  }
+
+  async function remoteLoadStateIfEnabled(currentState) {
+    try {
+      const enabled = (currentState?.settings?.remoteStorageEnabled ?? REMOTE_ENABLED_DEFAULT);
+      if (!enabled) return null;
+
+      const client = await ensureSupabase();
+      if (!client) return null;
+
+      const { data, error } = await client
+        .from(SUPABASE_TABLE)
+        .select("state, updated_at")
+        .eq("key", SUPABASE_ROW_KEY)
+        .maybeSingle();
+
+      if (error) {
+        console.warn("Supabase load error:", error);
+        return null;
+      }
+      if (!data || !data.state) return null;
+      return data.state;
+    } catch (e) {
+      console.warn("Supabase load exception:", e);
+      return null;
+    }
+  }
+
+  let _remoteSaveTimer = null;
+  async function remoteSaveStateIfEnabled(nextState) {
+    try {
+      const enabled = (nextState?.settings?.remoteStorageEnabled ?? REMOTE_ENABLED_DEFAULT);
+      if (!enabled) return;
+
+      const client = await ensureSupabase();
+      if (!client) return;
+
+      if (_remoteSaveTimer) clearTimeout(_remoteSaveTimer);
+      _remoteSaveTimer = setTimeout(async () => {
+        try {
+          const payload = {
+            key: SUPABASE_ROW_KEY,
+            state: nextState,
+            updated_at: new Date().toISOString(),
+          };
+          const { error } = await client.from(SUPABASE_TABLE).upsert(payload, { onConflict: "key" });
+          if (error) console.warn("Supabase save error:", error);
+        } catch (e) {
+          console.warn("Supabase save exception:", e);
+        }
+      }, 500);
+    } catch (e) {
+      console.warn("Supabase save outer exception:", e);
+    }
+  }
+
+
   const STORAGE_KEY_V15 = "up_planning_v15";
   const STORAGE_KEYS_OLD = [
     "up_planning_v15",
@@ -589,7 +692,11 @@ function getDevTypes(state) {
 
   function saveState(state) {
     localStorage.setItem(STORAGE_KEY_V16, JSON.stringify(state));
+  
+    // Best-effort remote persistence
+    remoteSaveStateIfEnabled(state);
   }
+
 
   function defaultState() {
     return {
@@ -1054,6 +1161,28 @@ s.devTypes =
 
     function openMyPages() {
       const state = migrateBestEffort();
+
+    // Remote sync (Supabase). If remote has state, replace local and re-render.
+    (async () => {
+      try {
+        const remote = await remoteLoadStateIfEnabled(state);
+        if (remote && typeof remote === "object") {
+          // Preserve current session
+          const session = loadSession();
+          // Replace
+          Object.keys(state).forEach((k) => { try { delete state[k]; } catch {} });
+          Object.assign(state, remote);
+          state.settings = state.settings || {};
+          if (session) saveSession(session);
+          saveState(state);
+          render(state);
+        }
+      } catch (e) {
+        console.warn("Remote sync skipped:", e);
+      }
+    })();
+
+
       const me = currentUser();
       const myInit = (me?.initials || "").toUpperCase();
 
