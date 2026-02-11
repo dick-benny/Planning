@@ -85,7 +85,7 @@
   // -------------------------------
   const SUPABASE_URL = "https://nchgudsqleylfdysgabi.supabase.co";
   const SUPABASE_KEY = "sb_publishable_TBIHlzs-Cw-fJfjUvkzzfw_mhrTLuLw";
-  const SUPABASE_TABLE = "usp_state";      // create this table in Supabase
+  const SUPABASE_TABLE = "planning";      // create this table in Supabase
   const SUPABASE_ROW_KEY = "main";         // single shared row (temporary; later per-org/per-user)
 
   const IS_LOCAL_DEV = ["localhost", "127.0.0.1"].includes(location.hostname);
