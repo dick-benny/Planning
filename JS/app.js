@@ -136,7 +136,7 @@
 
       const { data, error } = await client
         .from(SUPABASE_TABLE)
-        .select("state, updated_at")
+        .select("state")
         .eq("key", SUPABASE_ROW_KEY)
         .maybeSingle();
 
@@ -166,9 +166,7 @@
         try {
           const payload = {
             key: SUPABASE_ROW_KEY,
-            state: nextState,
-            updated_at: new Date().toISOString(),
-          };
+            state: nextState,          };
           const { error } = await client.from(SUPABASE_TABLE).upsert(payload, { onConflict: "key" });
           if (error) console.warn("Supabase save error:", error);
         } catch (e) {
