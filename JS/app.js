@@ -89,7 +89,7 @@
   const SUPABASE_ROW_KEY = "main";         // single shared row (temporary; later per-org/per-user)
 
   const IS_LOCAL_DEV = ["localhost", "127.0.0.1"].includes(location.hostname);
-  const REMOTE_ENABLED_DEFAULT = !IS_LOCAL_DEV;
+  const REMOTE_ENABLED_DEFAULT = true;
 
   let _supabaseClient = null;
   let _supabaseReady = null;
