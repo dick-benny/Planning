@@ -79,6 +79,38 @@
   // -------------------------------
   const STORAGE_KEY_V16 = "up_planning_v16";
 
+
+  // Remove any locally cached planning/routines data so Supabase is the single source of truth
+  function clearLocalPlanningCaches() {
+    try {
+      localStorage.removeItem("up_planning_v16");
+      localStorage.removeItem("up_planning_v15");
+      localStorage.removeItem("routines");
+      localStorage.removeItem("up_routines_v1");
+    } catch (e) {
+      console.warn("Could not clear local caches:", e);
+    }
+  }
+
+
+
+  // Utility: Clear local cache (planning) and reload (remote will repopulate)
+  function clearLocalCacheAndReload() {
+    try {
+      localStorage.removeItem(STORAGE_KEY_V16);
+      // Also clear routines cache (was historically stored separately)
+      localStorage.removeItem("routines");
+      localStorage.removeItem("up_routines_v1");
+
+      console.log("Local cache cleared. Reloading...");
+      location.reload();
+    } catch (e) {
+      console.warn("Could not clear local cache:", e);
+    }
+  }
+
+
+
   // -------------------------------
   // Remote storage (Supabase) - optional
   // NOTE: This uses a publishable key (OK for frontend) but requires proper RLS policies in Supabase.
@@ -1146,7 +1178,7 @@ s.devTypes =
     app.appendChild(modalBackdrop);
   }
 
-  function wireSettingsMenu(user) {
+  function wireSettingsMenu(user, state) {
     const btn = document.getElementById("settingsBtn");
     const menu = document.getElementById("settingsMenu");
 
@@ -1161,29 +1193,8 @@ s.devTypes =
     }
 
     function openMyPages() {
-      const state = migrateBestEffort();
-
-    // Remote sync (Supabase). If remote has state, replace local and re-render.
-    (async () => {
-      try {
-        const remote = await remoteLoadStateIfEnabled(state);
-        if (remote && typeof remote === "object") {
-          // Preserve current session
-          const session = loadSession();
-          // Replace
-          Object.keys(state).forEach((k) => { try { delete state[k]; } catch {} });
-          Object.assign(state, remote);
-          state.settings = state.settings || {};
-          if (session) saveSession(session);
-          saveState(state);
-          render(state);
-        }
-      } catch (e) {
-        console.warn("Remote sync skipped:", e);
-      } finally {
-        _remoteBootstrapped = true;
-      }
-    })();
+      // use shared state
+      
 
 
       const me = currentUser();
@@ -1243,7 +1254,8 @@ s.devTypes =
 
     
     function openManageRegisters() {
-      const state = migrateBestEffort();
+      // use shared state
+      
       ensureTodoCategories(state);
       openModal({
         title: "Register",
@@ -1363,6 +1375,7 @@ function doLogout() { clearSession(); location.reload(); }
     if (user?.role === "admin") menu.appendChild(item("Register", openManageRegisters));
     if (user?.role === "admin") menu.appendChild(item("Export data", exportAppData));
     if (user?.role === "admin") menu.appendChild(item("Import data", importAppData));
+    menu.appendChild(item("Rensa lokal cache & ladda om", clearLocalCacheAndReload));
     
     if (user?.role === "admin") menu.appendChild(item("Change user", () => doSwitchUser("Benny")));
     if (user?.role !== "admin" && (user?.username || "").toLowerCase() === "benny") menu.appendChild(item("Change user", () => doSwitchUser("Dick")));
@@ -1960,29 +1973,27 @@ function renderManageCategories(state) {
   function mountLogin(app) {
     app.innerHTML = "";
 
-    const users = getUsers();
     const card = el("div", { class: "login-card" }, [
       el("div", { class: "login-title" }, ["Logga in"]),
       el("div", { class: "login-sub" }, ["Login krävs innan appen öppnas."]),
     ]);
 
     const form = el("form", { class: "login-form" });
-    const userSel = el("select", { class: "input" }, users.map((u) => el("option", { value: u.username }, [u.username])));
-    const pw = el("input", { class: "input", type: "password", placeholder: "Lösenord" });
+    const userInp = el("input", { class: "input", type: "text", placeholder: "User", autocomplete: "username" });
+    const pw = el("input", { class: "input", type: "password", placeholder: "Password", autocomplete: "current-password" });
     const msg = el("div", { class: "login-msg" }, [""]);
-
     const btn = el("button", { class: "btn btn-primary", type: "submit" }, ["Logga in"]);
 
-    form.appendChild(el("div", { class: "label" }, ["Användare"]));
-    form.appendChild(userSel);
-    form.appendChild(el("div", { class: "label", style: "margin-top:10px;" }, ["Lösenord"]));
+    form.appendChild(el("div", { class: "label" }, ["User"]));
+    form.appendChild(userInp);
+    form.appendChild(el("div", { class: "label", style: "margin-top:10px;" }, ["Password"]));
     form.appendChild(pw);
     form.appendChild(btn);
     form.appendChild(msg);
 
     form.addEventListener("submit", (e) => {
       e.preventDefault();
-      const res = login(userSel.value, pw.value);
+      const res = login(userInp.value, pw.value);
       if (!res.ok) {
         msg.textContent = res.message;
         msg.classList.add("is-error");
@@ -1991,8 +2002,7 @@ function renderManageCategories(state) {
       location.reload();
     });
 
-    const seedHint = el("div", { class: "login-hint" }, ["Seed: ", el("b", {}, ["Dick"]), " (admin), lösenord ", el("b", {}, ["admin"]), "."]);
-    const wrap = el("div", { class: "login-wrap" }, [card, form, seedHint]);
+    const wrap = el("div", { class: "login-wrap" }, [card, form]);
     app.appendChild(wrap);
   }
 
@@ -4602,16 +4612,59 @@ function defaultTodo(state, category = "Allmänt", currentUserInitials = "Alla")
 
     mountBase(app, user);
     wireModalClose();
-    wireSettingsMenu(user);
+    // Settings menu will be wired after state is loaded
+    
 
-    const state = migrateBestEffort();
+    // Ensure Supabase is source-of-truth: clear any browser-cached planning/routines once per origin
+    try {
+      const flagKey = "usp_remote_cache_cleared_v1";
+      if (!localStorage.getItem(flagKey)) {
+        clearLocalPlanningCaches();
+        localStorage.setItem(flagKey, "1");
+      }
+    } catch (e) {}
+
+    const state = normalizeState(defaultState());
+    wireSettingsMenu(user, state);
+    state.settings = state.settings || {};
+    state.settings.remoteStorageEnabled = true;
+
     if (state.todo.lastWeek == null) state.todo.lastWeek = isoWeekNumber(new Date());
-    saveState(state);
 
-    ensureWeeklyRollover(state);
-    setInterval(() => ensureWeeklyRollover(state), 60 * 1000);
+    // Remote sync (Supabase) - remote is source of truth. We do not show local cache first.
+    (async () => {
+      let gotRemote = false;
+      try {
+        _remoteBootstrapped = false;
+        const remote = await remoteLoadStateIfEnabled(state);
+        if (remote && typeof remote === "object") {
+          gotRemote = true;
+          const session = loadSession();
+          Object.keys(state).forEach((k) => { try { delete state[k]; } catch {} });
+          Object.assign(state, normalizeState(remote));
+          state.settings = state.settings || {};
+          state.settings.remoteStorageEnabled = true;
+          if (session) saveSession(session);
+        }
+      } catch (e) {
+        console.warn("Remote sync failed:", e);
+      } finally {
+        _remoteBootstrapped = true;
 
-    render(state);
+        // Seed remote with default state if nothing exists yet
+        if (!gotRemote) {
+          try { remoteSaveStateIfEnabled(state); } catch {}
+        }
+
+        // Keep a local cache copy (optional). You can clear it via Settings.
+        try { localStorage.setItem(STORAGE_KEY_V16, JSON.stringify(state)); } catch {}
+
+        ensureWeeklyRollover(state);
+        setInterval(() => ensureWeeklyRollover(state), 60 * 1000);
+
+        render(state);
+      }
+    })();
   }
 
 
@@ -4619,15 +4672,37 @@ function defaultTodo(state, category = "Allmänt", currentUserInitials = "Alla")
      TOPBAR: RUTINER
      ========================= */
 
-  const ROUTINES_KEY = "routines";
+  // Rutiner lagras i main state (och synkas till Supabase). Ingen separat localStorage-nyckel.
+  function loadRoutines(state) {
+    const arr = state?.routines;
+    if (Array.isArray(arr)) return arr;
 
-  function loadRoutines() {
-    try { return JSON.parse(localStorage.getItem(ROUTINES_KEY) || "[]"); }
-    catch { return []; }
+    // Backward compat: om rutiner fanns cache:ade i state
+    const cached = state?.routinesCache;
+    if (Array.isArray(cached)) {
+      state.routines = cached.slice();
+      saveState(state);
+      return state.routines;
+    }
+
+    // Backward compat: om rutiner låg separat i localStorage (gamla versioner)
+    try {
+      const legacy = JSON.parse(localStorage.getItem("routines") || "[]");
+      if (Array.isArray(legacy) && legacy.length) {
+        state.routines = legacy;
+        try { localStorage.removeItem("routines"); } catch {}
+        saveState(state);
+        return state.routines;
+      }
+    } catch {}
+
+    state.routines = [];
+    return state.routines;
   }
 
-  function saveRoutines(routines) {
-    localStorage.setItem(ROUTINES_KEY, JSON.stringify(routines || []));
+  function saveRoutines(state, routines) {
+    state.routines = Array.isArray(routines) ? routines : [];
+    saveState(state);
   }
 
   function ensureRoutinesSelected(state, routines) {
@@ -4650,7 +4725,7 @@ function defaultTodo(state, category = "Allmänt", currentUserInitials = "Alla")
     heroInline.innerHTML = "";
     heroActions.innerHTML = "";
 
-    const routines = loadRoutines();
+    const routines = loadRoutines(state);
     const selectedId = ensureRoutinesSelected(state, routines);
 
     // Dropdown
@@ -4689,14 +4764,14 @@ function defaultTodo(state, category = "Allmänt", currentUserInitials = "Alla")
         class: "btn",
         type: "button",
         onclick: () => {
-          const routines2 = loadRoutines();
+          const routines2 = loadRoutines(state);
           const sid = state?.routines?.selectedId;
           if (!sid) return;
           const r = routines2.find(x => x.id === sid);
           const name = r?.namn || "vald rutin";
           if (!confirm(`Ta bort "${name}"?`)) return;
           saveRoutines(routines2.filter(x => x.id !== sid));
-          const after = loadRoutines();
+          const after = loadRoutines(state);
           ensureRoutinesSelected(state, after);
           render(state);
         },
@@ -4733,7 +4808,7 @@ function openRoutineStepNotesModal({ mode, stepIndex, getText, setText }) {
 
 // ---- Rutiner: gemensamt UI för Ny / Redigera ----
 function openRoutineFormModal(state, mode) {
-  const routines = loadRoutines();
+  const routines = loadRoutines(state);
   state.routines = state.routines || {};
   const selectedId = state.routines.selectedId || routines[0]?.id;
 
@@ -4813,7 +4888,7 @@ function openRoutineFormModal(state, mode) {
       const i = routines.findIndex(r => r.id === id);
       if (i >= 0) routines[i] = updated; else routines.push(updated);
 
-      saveRoutines(routines);
+      saveRoutines(state, routines);
       state.routines.selectedId = id;
 
       closeModal();
@@ -4864,7 +4939,7 @@ function renderRoutinesTab(state, user) {
     const view = document.getElementById("view");
     view.innerHTML = "";
 
-    const routines = loadRoutines();
+    const routines = loadRoutines(state);
     ensureRoutinesSelected(state, routines);
 
     if (!routines.length) {
@@ -5004,7 +5079,7 @@ function renderRoutinesTab(state, user) {
             const ok = confirm(`Ta bort rutin “${routine.namn || ""}”?`);
             if (!ok) return;
             const next = loadRoutines().filter((r) => r.id !== routine.id);
-            saveRoutines(next);
+            saveRoutines(state, next);
             ensureRoutinesSelected(state, next);
             render(state);
           }
@@ -5023,7 +5098,7 @@ function renderRoutinesTab(state, user) {
 
 
   function openNotesModal({ state, routineId, stepIndex, role }) {
-    const routines = loadRoutines();
+    const routines = loadRoutines(state);
     const rIndex = routines.findIndex(r => r.id === routineId);
     if (rIndex < 0) return;
     const routine = routines[rIndex];
@@ -5045,14 +5120,14 @@ function renderRoutinesTab(state, user) {
         type: "button",
         onclick: () => {
           // persist safely
-          const routines2 = loadRoutines();
+          const routines2 = loadRoutines(state);
           const ri = routines2.findIndex(r => r.id === routineId);
           if (ri < 0) return closeModal();
           const r2 = routines2[ri];
           r2.steg = r2.steg || [];
           r2.steg[stepIndex] = r2.steg[stepIndex] || {};
           r2.steg[stepIndex].notes = textarea.value;
-          saveRoutines(routines2);
+          saveRoutines(state, routines2);
           closeModal();
           render(state);
         }
@@ -5078,7 +5153,7 @@ function renderRoutinesTab(state, user) {
   
   
   function openRoutineEditorModal(state, { mode = "new", routineId = null } = {}) {
-    const routines = loadRoutines();
+    const routines = loadRoutines(state);
 
     const existing = (mode === "edit" && routineId)
       ? routines.find(r => r.id === routineId)
@@ -5225,7 +5300,7 @@ function renderRoutinesTab(state, user) {
       if (idx >= 0) routines[idx] = updated;
       else routines.push(updated);
 
-      saveRoutines(routines);
+      saveRoutines(state, routines);
       ensureRoutinesSelected(state, routines);
 
       closeModal();
@@ -5288,7 +5363,7 @@ function openNewRoutineModal(state) {
   }
 
   function openEditRoutineModal(state) {
-    const routines = loadRoutines();
+    const routines = loadRoutines(state);
     const selectedId = ensureRoutinesSelected(state, routines);
     if (!selectedId) {
       alert("Det finns inga rutiner att redigera.");
@@ -5299,38 +5374,3 @@ function openNewRoutineModal(state) {
 
   document.addEventListener("DOMContentLoaded", init);
 })();
-
-
-// -------------------------------------------------
-// Settings Utility Button: Clear local cache
-// -------------------------------------------------
-function clearLocalCacheAndReload() {
-  try {
-    localStorage.removeItem(STORAGE_KEY_V16);
-    console.log("Local cache cleared. Reloading...");
-    location.reload();
-  } catch (e) {
-    console.warn("Could not clear local cache:", e);
-  }
-}
-
-// Inject button when Settings view is visible
-window.addEventListener("load", function () {
-  const interval = setInterval(() => {
-    // crude but safe detection of Settings view
-    if (document.body && document.body.innerText.includes("Settings")) {
-      if (!document.getElementById("btn-clear-local-cache")) {
-        const btn = document.createElement("button");
-        btn.id = "btn-clear-local-cache";
-        btn.innerText = "Rensa lokal cache & ladda från Supabase";
-        btn.style.position = "fixed";
-        btn.style.bottom = "20px";
-        btn.style.right = "20px";
-        btn.style.zIndex = "9999";
-        btn.className = "btn";
-        btn.onclick = clearLocalCacheAndReload;
-        document.body.appendChild(btn);
-      }
-    }
-  }, 1000);
-});
