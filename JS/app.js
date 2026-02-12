@@ -93,6 +93,7 @@
 
   let _supabaseClient = null;
   let _supabaseReady = null;
+  let _remoteBootstrapped = false; // prevents overwriting remote before first remote load completes
 
   function ensureSupabase() {
     if (_supabaseReady) return _supabaseReady;
@@ -157,13 +158,15 @@
     try {
       const enabled = (nextState?.settings?.remoteStorageEnabled ?? REMOTE_ENABLED_DEFAULT);
       if (!enabled) return;
+      if (!_remoteBootstrapped) return;
 
       const client = await ensureSupabase();
       if (!client) return;
 
       if (_remoteSaveTimer) clearTimeout(_remoteSaveTimer);
       _remoteSaveTimer = setTimeout(async () => {
-        try {
+      try {
+        _remoteBootstrapped = false;
           const payload = {
             key: SUPABASE_ROW_KEY,
             state: nextState,          };
@@ -1177,6 +1180,8 @@ s.devTypes =
         }
       } catch (e) {
         console.warn("Remote sync skipped:", e);
+      } finally {
+        _remoteBootstrapped = true;
       }
     })();
 
@@ -5294,3 +5299,38 @@ function openNewRoutineModal(state) {
 
   document.addEventListener("DOMContentLoaded", init);
 })();
+
+
+// -------------------------------------------------
+// Settings Utility Button: Clear local cache
+// -------------------------------------------------
+function clearLocalCacheAndReload() {
+  try {
+    localStorage.removeItem(STORAGE_KEY_V16);
+    console.log("Local cache cleared. Reloading...");
+    location.reload();
+  } catch (e) {
+    console.warn("Could not clear local cache:", e);
+  }
+}
+
+// Inject button when Settings view is visible
+window.addEventListener("load", function () {
+  const interval = setInterval(() => {
+    // crude but safe detection of Settings view
+    if (document.body && document.body.innerText.includes("Settings")) {
+      if (!document.getElementById("btn-clear-local-cache")) {
+        const btn = document.createElement("button");
+        btn.id = "btn-clear-local-cache";
+        btn.innerText = "Rensa lokal cache & ladda från Supabase";
+        btn.style.position = "fixed";
+        btn.style.bottom = "20px";
+        btn.style.right = "20px";
+        btn.style.zIndex = "9999";
+        btn.className = "btn";
+        btn.onclick = clearLocalCacheAndReload;
+        document.body.appendChild(btn);
+      }
+    }
+  }, 1000);
+});
