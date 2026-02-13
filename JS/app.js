@@ -54,6 +54,12 @@
   function setSession(sess) { saveJson(AUTH_SESSION_KEY, sess); }
   function clearSession() { localStorage.removeItem(AUTH_SESSION_KEY); }
 
+  // Backwards-compatible aliases (older versions used loadSession/saveSession)
+  function loadSession() { return getSession(); }
+  function saveSession(sess) { return setSession(sess); }
+
+
+
   function findUser(username) {
     const users = getUsers();
     return users.find((u) => (u.username || "").toLowerCase() === (username || "").toLowerCase()) || null;
@@ -119,6 +125,42 @@
     }
   }
 
+  async function forceReloadFromSupabase(state) {
+    try {
+      const remote = await remoteLoadStateIfEnabled(state);
+      if (remote && typeof remote === "object") {
+        const session = loadSession();
+        Object.keys(state).forEach((k) => { try { delete state[k]; } catch {} });
+        Object.assign(state, normalizeState(remote));
+        if (session) saveSession(session);
+        try { localStorage.setItem(STORAGE_KEY_V16, JSON.stringify(state)); } catch {}
+        render(state);
+        alert("Klart: laddade data från Supabase.");
+      } else {
+        alert("Hittade ingen data i Supabase för key='main'. Kontrollera att tabellen planning har en rad med key = main.");
+      }
+    } catch (e) {
+      alert("Kunde inte ladda från Supabase: " + (e?.message || e));
+    }
+  }
+
+  function showSupabaseStatus(state) {
+    const host = location.hostname;
+    const enabled = (state?.settings?.remoteStorageEnabled ?? REMOTE_ENABLED_DEFAULT);
+    const msg =
+      "Supabase status\n" +
+      "Host: " + host + "\n" +
+      "Remote enabled: " + enabled + "\n" +
+      "Table: " + SUPABASE_TABLE + "\n" +
+      "Row key: " + SUPABASE_ROW_KEY + "\n" +
+      "Load attempted: " + _remoteLoadAttempted + "\n" +
+      "Had data: " + _remoteLoadHadData + "\n" +
+      (_remoteLastError ? ("Last error: " + _remoteLastError + "\n") : "");
+    alert(msg);
+  }
+
+
+
 
 
   // -------------------------------
@@ -131,11 +173,14 @@
   const SUPABASE_ROW_KEY = "main";         // single shared row (temporary; later per-org/per-user)
 
   const IS_LOCAL_DEV = ["localhost", "127.0.0.1"].includes(location.hostname);
-  const REMOTE_ENABLED_DEFAULT = true;
+  const REMOTE_ENABLED_DEFAULT = !IS_LOCAL_DEV;
 
   let _supabaseClient = null;
   let _supabaseReady = null;
   let _remoteBootstrapped = false; // prevents overwriting remote before first remote load completes
+  let _remoteLoadAttempted = false;
+  let _remoteLoadHadData = false;
+  let _remoteLastError = "";
 
   function ensureSupabase() {
     if (_supabaseReady) return _supabaseReady;
@@ -173,6 +218,8 @@
     try {
       const enabled = (currentState?.settings?.remoteStorageEnabled ?? REMOTE_ENABLED_DEFAULT);
       if (!enabled) return null;
+      _remoteLoadAttempted = true;
+      _remoteLastError = "";
 
       const client = await ensureSupabase();
       if (!client) return null;
@@ -185,12 +232,14 @@
 
       if (error) {
         console.warn("Supabase load error:", error);
+        _remoteLastError = (error && (error.message || JSON.stringify(error))) || "load error";
         return null;
       }
       if (!data || !data.state) return null;
       return data.state;
     } catch (e) {
       console.warn("Supabase load exception:", e);
+      _remoteLastError = (e && (e.message || String(e))) || "load exception";
       return null;
     }
   }
@@ -605,9 +654,9 @@ function openActivityNotesModal(state, entryOrRow, activity, user) {
     // Normalisera + slå ihop
     const merged = uniqStrings([...(state.devTypes || []), ...found]);
 
-    // Om vi fortfarande är tomma: behåll tomt (admin kan lägga till manuellt).
-    // Men om vi hittade något i data, spara det i registret så dropdown fungerar direkt.
-    state.devTypes = merged;
+    // Om vi är tomma men hade legacy-värden: behåll legacy (förhindrar att Dev_type råkar nollas)
+    const legacyArr = Array.isArray(legacy) ? legacy.slice() : [];
+    state.devTypes = merged.length ? merged : legacyArr;
 
     // Rensa vissa legacy-nycklar (men behåll register/registers.* så att andra delar av appen kan läsa dem)
     delete state.dev_types;
@@ -615,11 +664,23 @@ function openActivityNotesModal(state, entryOrRow, activity, user) {
     delete state.devType;
     delete state.devtype;
 
-    // Spegla alltid devTypes in i register/registers för bakåtkompatibilitet
+    // Spegla devTypes in i register/registers för bakåtkompatibilitet.
+    // VIKTIGT: vi får inte skriva över ett befintligt register med [] om devTypes råkar vara tomt
+    // (annars kan "Dev_type" försvinna om något steg av init/migrering ger tom lista).
     state.register = state.register || {};
     state.registers = state.registers || {};
-    state.register.dev_type = Array.isArray(state.devTypes) ? state.devTypes.slice() : [];
-    state.registers.dev_type = Array.isArray(state.devTypes) ? state.devTypes.slice() : [];
+
+    const existingReg = Array.isArray(state.register.dev_type) ? state.register.dev_type : [];
+    const existingRegs = Array.isArray(state.registers.dev_type) ? state.registers.dev_type : [];
+
+    if (Array.isArray(state.devTypes) && state.devTypes.length) {
+      state.register.dev_type = state.devTypes.slice();
+      state.registers.dev_type = state.devTypes.slice();
+    } else {
+      // Behåll befintliga registervärden om de finns
+      if (existingReg.length) state.register.dev_type = existingReg.slice();
+      if (existingRegs.length) state.registers.dev_type = existingRegs.slice();
+    }
   }
 
   function isTypeActivity(activity) {
@@ -1386,6 +1447,9 @@ function doLogout() { clearSession(); location.reload(); }
     if (user?.role === "admin") menu.appendChild(item("Export data", exportAppData));
     if (user?.role === "admin") menu.appendChild(item("Import data", importAppData));
     menu.appendChild(item("Rensa lokal cache & ladda om", clearLocalCacheAndReload));
+    menu.appendChild(item("Supabase: visa status", () => showSupabaseStatus(state)));
+    menu.appendChild(item("Supabase: ladda om från Supabase", () => forceReloadFromSupabase(state)));
+
     
     if (user?.role === "admin") menu.appendChild(item("Change user", () => doSwitchUser("Benny")));
     if (user?.role !== "admin" && (user?.username || "").toLowerCase() === "benny") menu.appendChild(item("Change user", () => doSwitchUser("Dick")));
@@ -1467,25 +1531,9 @@ function renderManageUsers(current) {
 
       const inRole = el("select", { class: "input" }, [
         el("option", { value: "user" }, ["user"]),
-        el("option", { value: "admin" }, ["admin"]),
+        el("option", { value: "" }, ["admin"]),
       ]);
       inRole.value = (existing?.role === "admin") ? "admin" : "user";
-      
-      // ToDo-filterkategorier (exkl. Privat) - vilka delade kategorier användaren ser i ToDo-filter
-      const st = current;
-      ensureTodoCategories(st);
-      const allCats = getTodoCategories(st).filter((c) => c !== "Privat" && c !== "Alla");
-      const picked = new Set(Array.isArray(existing?.todoFilterCategories) ? existing.todoFilterCategories : []);
-      const catWrap = el("div", { style: "display:flex;flex-wrap:wrap;gap:8px;margin-top:6px;" });
-      allCats.forEach((c) => {
-        const chip = el("button", { type: "button", class: "pill", style: "font-weight:900;" }, [c]);
-        if (picked.has(c)) chip.classList.add("pill-done");
-        chip.addEventListener("click", () => {
-          if (picked.has(c)) { picked.delete(c); chip.classList.remove("pill-done"); }
-          else { picked.add(c); chip.classList.add("pill-done"); }
-        });
-        catWrap.appendChild(chip);
-      });
 
 
       grid.appendChild(el("div", {}, [el("div", { class: "label" }, ["Namn/user"]), inUser]));
@@ -1504,7 +1552,6 @@ function renderManageUsers(current) {
         const email = (inEmail.value || "").trim();
         const initials = (inInit.value || "").trim();
         const role = inRole.value || "user";
-        const todoFilterCategories = Array.from(picked);
 
         if (!username || !password || !initials) { alert("Fyll i Namn/user, Password och Initials."); return; }
         if (email && !email.includes("@")) { alert("Email verkar inte korrekt."); return; }
@@ -1521,7 +1568,6 @@ function renderManageUsers(current) {
             email,
             initials: initials.toUpperCase(),
             role: role === "admin" ? "admin" : "user",
-            todoFilterCategories,
             createdAt: Date.now(),
           });
         } else {
@@ -1535,7 +1581,6 @@ function renderManageUsers(current) {
           u.email = email;
           u.initials = initials.toUpperCase();
           u.role = role === "admin" ? "admin" : "user";
-          u.todoFilterCategories = todoFilterCategories;
 
           if (u.id === current.id) {
             setUsers(users);
@@ -1597,7 +1642,7 @@ function renderManageUsers(current) {
     const actions = el("div", { class: "reg-toolbar-actions" }, [btnDeleteReg, btnNewReg]);
 
     const hint = el("div", { class: "reg-hint" }, [
-      "Kategori används i Tasks-filter. Dev_type används som dropdown (P-typ) i Utvecklingsprocess och Säljprocess Ny produkt.",
+      "Dev_type används som dropdown (P-typ) i Utvecklingsprocess och Säljprocess Ny produkt.",
     ]);
 
     top.appendChild(el("div", { class: "label", style: "margin:0;" }, ["Register"]));
@@ -2094,13 +2139,6 @@ function renderManageCategories(state) {
           return opt;
         }));
 
-        const defTasksBtn = el("button", {
-          class: "pill",
-          type: "button",
-          onclick: () => openDefTasksModal(state, a),
-          title: "Definiera tasks",
-        }, ["Def Tasks"]);
-
         const delBtn = el("button", {
           class: "icon-btn up-trash",
           type: "button",
@@ -2119,7 +2157,6 @@ function renderManageCategories(state) {
 
         row.appendChild(name);
         row.appendChild(typeSel);
-        row.appendChild(defTasksBtn);
         row.appendChild(delBtn);
 
         list.appendChild(row);
@@ -2208,13 +2245,6 @@ function renderManageCategories(state) {
           return opt;
         }));
 
-        const defTasksBtn = el("button", {
-          class: "pill",
-          type: "button",
-          onclick: () => openDefTasksModal(state, a),
-          title: "Definiera tasks",
-        }, ["Def Tasks"]);
-
         const delBtn = el("button", {
           class: "icon-btn up-trash",
           type: "button",
@@ -2232,7 +2262,6 @@ function renderManageCategories(state) {
 
         row.appendChild(name);
         row.appendChild(typeSel);
-        row.appendChild(defTasksBtn);
         row.appendChild(delBtn);
 
         list.appendChild(row);
@@ -2321,13 +2350,6 @@ function renderManageCategories(state) {
           return opt;
         }));
 
-        const defTasksBtn = el("button", {
-          class: "pill",
-          type: "button",
-          onclick: () => openDefTasksModal(state, a),
-          title: "Definiera tasks",
-        }, ["Def Tasks"]);
-
         const delBtn = el("button", {
           class: "icon-btn up-trash",
           type: "button",
@@ -2345,7 +2367,6 @@ function renderManageCategories(state) {
 
         row.appendChild(name);
         row.appendChild(typeSel);
-        row.appendChild(defTasksBtn);
         row.appendChild(delBtn);
 
         list.appendChild(row);
@@ -2393,7 +2414,6 @@ function renderManageCategories(state) {
         id: uid("act"),
         name,
         type: DEV_ACTIVITY_TYPES.includes(type) ? type : "text",
-        tasks: [],
         createdAt: Date.now(),
       });
       saveState(state);
@@ -2432,7 +2452,6 @@ function renderManageCategories(state) {
         id: uid("act"),
         name,
         type: DEV_ACTIVITY_TYPES.includes(type) ? type : "text",
-        tasks: [],
         createdAt: Date.now(),
       });
       saveState(state);
@@ -3170,7 +3189,7 @@ const actions = el("div", { style: "display:flex;gap:10px;justify-content:flex-e
   // -------------------------------
   function renderPlaceholderModal() {
     return el("div", {}, [
-      el("div", { class: "label" }, ["Tasks"]),
+      el("div", { class: "label" }, ["Aktivitet"]),
       el("div", { style: "padding:12px;border:1px dashed #d1d5db;border-radius:12px;background:#fff;color:#111827;" }, ["To be added"]),
     ]);
   }
@@ -4628,6 +4647,9 @@ function defaultTodo(state, category = "Allmänt", currentUserInitials = "Alla")
     // Ensure Supabase is source-of-truth: clear any browser-cached planning/routines on every load
     try { clearLocalPlanningCaches(); } catch (e) {}
 
+    // Force fresh login prompt on every load (do not auto-reuse prior session)
+    try { localStorage.removeItem(AUTH_SESSION_KEY); } catch (e) {}
+
     const state = normalizeState(defaultState());
     wireSettingsMenu(user, state);
     state.settings = state.settings || {};
@@ -4643,6 +4665,7 @@ function defaultTodo(state, category = "Allmänt", currentUserInitials = "Alla")
         const remote = await remoteLoadStateIfEnabled(state);
         if (remote && typeof remote === "object") {
           gotRemote = true;
+          _remoteLoadHadData = true;
           const session = loadSession();
           Object.keys(state).forEach((k) => { try { delete state[k]; } catch {} });
           Object.assign(state, normalizeState(remote));
@@ -4654,11 +4677,8 @@ function defaultTodo(state, category = "Allmänt", currentUserInitials = "Alla")
         console.warn("Remote sync failed:", e);
       } finally {
         _remoteBootstrapped = true;
+        if (!gotRemote) _remoteLoadHadData = false;
 
-        // Seed remote with default state if nothing exists yet
-        if (!gotRemote) {
-          try { remoteSaveStateIfEnabled(state); } catch {}
-        }
 
         // Keep a local cache copy (optional). You can clear it via Settings.
         try { localStorage.setItem(STORAGE_KEY_V16, JSON.stringify(state)); } catch {}
