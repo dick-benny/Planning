@@ -83,10 +83,20 @@
   // Remove any locally cached planning/routines data so Supabase is the single source of truth
   function clearLocalPlanningCaches() {
     try {
-      localStorage.removeItem("up_planning_v16");
-      localStorage.removeItem("up_planning_v15");
-      localStorage.removeItem("routines");
-      localStorage.removeItem("up_routines_v1");
+      // main state keys (planning)
+      ["up_planning_v16","up_planning_v15","up_planning_v14","up_planning_v13"].forEach((k)=>{
+        try { localStorage.removeItem(k); } catch {}
+      });
+      // historical routines keys
+      ["routines","up_routines_v1"].forEach((k)=>{
+        try { localStorage.removeItem(k); } catch {}
+      });
+      // clear any other old keys listed in code
+      try {
+        if (typeof STORAGE_KEYS_OLD !== "undefined" && Array.isArray(STORAGE_KEYS_OLD)) {
+          STORAGE_KEYS_OLD.forEach((k) => { try { localStorage.removeItem(k); } catch {} });
+        }
+      } catch {}
     } catch (e) {
       console.warn("Could not clear local caches:", e);
     }
@@ -4615,14 +4625,8 @@ function defaultTodo(state, category = "Allmänt", currentUserInitials = "Alla")
     // Settings menu will be wired after state is loaded
     
 
-    // Ensure Supabase is source-of-truth: clear any browser-cached planning/routines once per origin
-    try {
-      const flagKey = "usp_remote_cache_cleared_v1";
-      if (!localStorage.getItem(flagKey)) {
-        clearLocalPlanningCaches();
-        localStorage.setItem(flagKey, "1");
-      }
-    } catch (e) {}
+    // Ensure Supabase is source-of-truth: clear any browser-cached planning/routines on every load
+    try { clearLocalPlanningCaches(); } catch (e) {}
 
     const state = normalizeState(defaultState());
     wireSettingsMenu(user, state);
