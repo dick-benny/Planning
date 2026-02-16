@@ -2,14 +2,25 @@
 <html lang="sv">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>US-planning</title>
-  <link rel="stylesheet" href="CSS/style.css" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>USP</title>
+  <link rel="stylesheet" href="./CSS/style.css" />
 </head>
 <body>
-<div id="app"></div>
+  <div id="app"></div>
 
-  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
-  <script src="JS/app.js"></script>
+  <!-- Load order is critical. Keep defer and this exact order. -->
+  <script defer src="./JS/app_01_bootstrap.js"></script>
+
+  <!-- Schema rules (Name is key) -->
+  <script defer src="./JS/app_06_schema.js"></script>
+
+  <!-- Optional files (keep if they exist in ./JS/) -->
+  <script defer src="./JS/app_02_config.js"></script>
+  <script defer src="./JS/app_08_db.js"></script>
+  <script defer src="./JS/app_07_actions.js"></script>
+
+  <script defer src="./JS/app_04_ui.js"></script>
+  <script defer src="./JS/app_05_handlers.js"></script>
 </body>
 </html>
