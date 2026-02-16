@@ -18,7 +18,7 @@
   // ---------------------------
   const App = (USP.App = USP.App || {});
   USP.Env = USP.Env || {};
-  App.VERSION = 73;
+  App.VERSION = 76;
 
   // Storage keys
   const LS_STATE = "usp_state_latest_v2";
@@ -48,8 +48,76 @@
       if (!o.id) o.id = uid("f");
       return o;
     }).sort((a,b)=> (a.order??0)-(b.order??0));
+    s.fields = migrateFieldTypeToMods(dedupeFieldNames(s.fields));
     s.fields.forEach((f,i)=>{ f.order=i; });
     return s;
+  }
+
+
+
+  function migrateFieldTypeToMods(fields) {
+    (fields || []).forEach((f) => {
+      if (!f) return;
+      const t = String(f.type || "").trim();
+      if (!t) { f.type = "text"; return; }
+      if (f.mods && typeof f.mods === "object") return;
+
+      // old combined strings -> base + mods
+      const map = {
+        "text_notes": { base:"text", mods:{ notes:true } },
+        "status_notes": { base:"status", mods:{ notes:true } },
+        "date_notes": { base:"date", mods:{ notes:true } },
+        "week_notes": { base:"week", mods:{ notes:true } },
+        "produktkategori_notes": { base:"produktkategori", mods:{ notes:true } },
+        // plus-sign forms (if any were stored)
+        "text+notes": { base:"text", mods:{ notes:true } },
+        "status+notes": { base:"status", mods:{ notes:true } },
+        "date+notes": { base:"date", mods:{ notes:true } },
+        "week+notes": { base:"week", mods:{ notes:true } },
+        "produktkategori+notes": { base:"produktkategori", mods:{ notes:true } },
+      };
+
+      const key = t.toLowerCase().replace(/\s+/g, "");
+      if (map[key]) {
+        f.type = map[key].base;
+        f.mods = map[key].mods;
+        // regenerate id to avoid rename-lock weirdness if we had to touch schema
+        try { f.id = uid("f"); } catch (e) {}
+        return;
+      }
+
+      // plain base types stay
+      f.type = key;
+      f.mods = f.mods || {};
+    });
+    return fields;
+  }
+
+  function dedupeFieldNames(fields) {
+    const used = Object.create(null);
+    (fields || []).forEach((f) => {
+      if (!f) return;
+      const base = String(f.name || "").trim() || "Fält";
+      let name = base;
+      let k = name.toLowerCase();
+      if (!used[k]) { used[k] = 1; f.name = name; return; }
+      // If duplicate, append " 2", " 3", ...
+      let n = used[k] + 1;
+      while (true) {
+        const cand = base + " " + n;
+        const ck = cand.toLowerCase();
+        if (!used[ck]) {
+          f.name = cand;
+          // If we had to rename due to duplicate, regenerate id so rename-lock does not fire
+          try { f.id = uid("f"); } catch (e) { f.id = "f_" + Date.now() + "_" + Math.random().toString(16).slice(2); }
+          used[ck] = 1;
+          used[k] = n; // advance counter for base
+          break;
+        }
+        n += 1;
+      }
+    });
+    return fields;
   }
 
   function validateSchema(schema) {

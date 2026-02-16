@@ -1,4 +1,4 @@
-/* app_04_ui_76.js
+/* app_04_ui_90.js
    USP UI (design-restored via style.css classes)
    - Keeps v60+ deterministic router: tab + role -> view
    - Uses existing CSS classes (.topbar, .tabs, .hero, .table-wrap, etc.)
@@ -72,6 +72,209 @@
     document.body.appendChild(pop);
   }
   const App = USP.App;
+
+  // ---------------------------
+  // Field type registry integration (Admin schema dropdown)
+  // ---------------------------
+  function getFieldTypeOptions() {
+    try {
+      if (App.FieldTypes && typeof App.FieldTypes.list === "function") {
+        const list = App.FieldTypes.list() || [];
+        return list.map(x => ({ value: x.key, label: x.label }));
+      }
+    } catch (e) {}
+    return [
+      { value:"text", label:"Text" },
+      { value:"date", label:"Datum" },
+      { value:"week", label:"Vecka" },
+      { value:"status", label:"Status" },
+    ];
+  }
+
+  function makeTypeConfigEditor(field, onChange) {
+    const f = field || {};
+    const mods = (f.mods && typeof f.mods === "object") ? f.mods : {};
+    const base = String(f.type || "text");
+
+    const bases = (App.FieldTypes && App.FieldTypes.listBase) ? App.FieldTypes.listBase() : [
+      { key:"text", label:"Text" },{ key:"status", label:"Status" },{ key:"date", label:"Datum" },{ key:"week", label:"Vecka" },{ key:"produktkategori", label:"Produktkategori" }
+    ];
+    const modsList = (App.FieldTypes && App.FieldTypes.listMods) ? App.FieldTypes.listMods() : [
+      { key:"corner", label:"Hörnmarkör" },{ key:"initials", label:"Initialer" },{ key:"notes", label:"Notes" }
+    ];
+
+    const baseSel = el("select", { class: inputClass() }, []);
+    bases.forEach(b => {
+      const opt = el("option", { value: b.key }, [b.label]);
+      if (String(b.key) === String(base)) opt.selected = true;
+      baseSel.appendChild(opt);
+    });
+    baseSel.addEventListener("change", function () {
+      const next = Object.assign({}, f, { type: baseSel.value });
+      if (typeof onChange === "function") onChange(next);
+    });
+
+    const modsWrap = el("div", { style:"display:flex;gap:10px;flex-wrap:wrap;align-items:center;" }, []);
+    modsList.forEach(m => {
+      const id = "m_" + m.key + "_" + Math.random().toString(16).slice(2);
+      const cb = el("input", { type:"checkbox", id:id }, []);
+      cb.checked = !!mods[m.key];
+
+      cb.addEventListener("change", function () {
+        const nextMods = Object.assign({}, (f.mods || {}), { [m.key]: cb.checked });
+        // remove false flags
+        Object.keys(nextMods).forEach(k => { if (!nextMods[k]) delete nextMods[k]; });
+        const next = Object.assign({}, f, { mods: nextMods });
+        if (typeof onChange === "function") onChange(next);
+      });
+
+      const lab = el("label", { for:id, style:"display:flex;gap:6px;align-items:center;cursor:pointer;" }, [
+        cb, el("span", { class:"muted", text: m.label }, [])
+      ]);
+      modsWrap.appendChild(lab);
+    });
+
+    const grid = el("div", { style:"display:grid;grid-template-columns: 1fr 2fr;gap:12px;align-items:start;" }, [
+      el("div", {}, [ baseSel ]),
+      modsWrap
+    ]);
+
+    return grid;
+  }
+
+
+  function makeModCheckbox(field, modKey, onChange) {
+    const f = field || {};
+    const mods = (f.mods && typeof f.mods === "object") ? f.mods : {};
+    const cb = el("input", { type:"checkbox" }, []);
+    cb.checked = !!mods[modKey];
+    cb.addEventListener("change", function () {
+      const nextMods = Object.assign({}, mods, { [modKey]: cb.checked });
+      Object.keys(nextMods).forEach(k => { if (!nextMods[k]) delete nextMods[k]; });
+      const next = Object.assign({}, f, { mods: nextMods });
+      if (typeof onChange === "function") onChange(next);
+    });
+    return el("div", { style:"display:flex;justify-content:center;align-items:center;" }, [cb]);
+  }
+
+
+  function makeTypeSelect(current, onChange, full) {
+    const opts = getFieldTypeOptions();
+    const sel = el("select", { class: full ? "input full" : "input" }, []);
+    opts.forEach(o => {
+      const opt = el("option", { value:o.value }, [o.label]);
+      if (String(o.value) === String(current)) opt.selected = true;
+      sel.appendChild(opt);
+    });
+    sel.addEventListener("change", () => { if (typeof onChange === "function") onChange(sel.value); });
+    return sel;
+  }
+
+
+  function currentInitials() {
+    try {
+      const st = App.getState ? App.getState() : {};
+      const cand = [
+        st.currentUser && st.currentUser.initials,
+        st.user && st.user.initials,
+        st.session && st.session.user && st.session.user.initials,
+        st.auth && st.auth.user && st.auth.user.initials,
+        st.authUser && st.authUser.initials,
+      ].filter(Boolean)[0];
+      return String(cand || "??");
+    } catch (e) { return "??"; }
+  }
+
+
+  function cornerKeyFor(fieldName) { return String(fieldName) + "__corner"; }
+  function initialsKeyFor(fieldName) { return String(fieldName) + "__initials"; }
+
+  function listAvailableInitials() {
+    try {
+      const st = App.getState ? App.getState() : {};
+      const users = (st && (st.users || (st.auth && st.auth.users) || (st.settings && st.settings.users))) || [];
+      const arr = Array.isArray(users) ? users : [];
+      const ini = arr.map(u => (u && (u.initials || u.ini)) ? String(u.initials || u.ini).trim() : "").filter(Boolean);
+      // fall back to two demo users
+      const fallback = ["DE","BB"];
+      const out = (ini.length ? ini : fallback);
+      // unique
+      return Array.from(new Set(out));
+    } catch (e) { return ["DE","BB"]; }
+  }
+
+  function promptPickInitials(current) {
+    const list = listAvailableInitials();
+    const msg = "Välj initialer:\n" + list.map((x,i)=> (i+1)+": "+x).join("\n") + "\n\nSkriv nummer eller initialer. Tomt = --";
+    const v = window.prompt(msg, String(current || ""));
+    if (v === null) return null;
+    const t = String(v || "").trim();
+    if (!t) return "--";
+    const n = parseInt(t, 10);
+    if (Number.isFinite(n) && n >= 1 && n <= list.length) return list[n-1];
+    return t.toUpperCase();
+  }
+
+  function notesKeyFor(fieldName) { return String(fieldName) + "__notes_log"; }
+
+  function readNotesLog(fields, fieldName) {
+    const k = notesKeyFor(fieldName);
+    const v = fields ? fields[k] : null;
+    if (Array.isArray(v)) return v;
+    if (typeof v === "string" && v.trim().startsWith("[")) {
+      try { const a = JSON.parse(v); return Array.isArray(a) ? a : []; } catch (e) { return []; }
+    }
+    return [];
+  }
+
+  function writeNotesLog(fields, fieldName, logArr) {
+    const k = notesKeyFor(fieldName);
+    fields[k] = Array.isArray(logArr) ? logArr : [];
+  }
+
+  function formatNotesLog(logArr) {
+    const a = Array.isArray(logArr) ? logArr : [];
+    if (!a.length) return "";
+    return a.map((x) => {
+      const ts = x && x.ts ? String(x.ts) : "";
+      const by = x && x.by ? String(x.by) : "";
+      const txt = x && x.text ? String(x.text) : "";
+      return (ts ? ts : "") + (by ? " " + by : "") + (txt ? "\n" + txt : "");
+    }).join("\n\n---\n\n");
+  }
+
+  function promptAddNote(existingLog) {
+    const header = existingLog && existingLog.length ? ("Befintliga anteckningar:\n\n" + formatNotesLog(existingLog) + "\n\n---\n\n") : "";
+    const v = window.prompt(header + "Ny anteckning:", "");
+    if (v === null) return null;
+    const t = String(v || "").trim();
+    if (!t) return ""; // allow clearing (no append)
+    return t;
+  }
+
+  function getRowSafe(tabKey, rowId, state) {
+    try {
+      if (App.getRow && typeof App.getRow === "function") return App.getRow(tabKey, rowId, state);
+    } catch (e) {}
+    try {
+      if (App.getRows && typeof App.getRows === "function") {
+        const rows = App.getRows(tabKey, state) || [];
+        return rows.find(r => String(r.id) === String(rowId)) || null;
+      }
+    } catch (e) {}
+    const st = state || {};
+    const candidates = [];
+    if (st.data && typeof st.data === "object" && Array.isArray(st.data[tabKey])) candidates.push(st.data[tabKey]);
+    if (st.rowsByTab && typeof st.rowsByTab === "object" && Array.isArray(st.rowsByTab[tabKey])) candidates.push(st.rowsByTab[tabKey]);
+    if (st.tabs && typeof st.tabs === "object" && st.tabs[tabKey] && Array.isArray(st.tabs[tabKey].rows)) candidates.push(st.tabs[tabKey].rows);
+    for (const arr of candidates) {
+      const found = arr.find(r => String(r.id) === String(rowId));
+      if (found) return found;
+    }
+    return null;
+  }
+
+
 
   // ---------------------------
   // DOM helpers
@@ -219,7 +422,67 @@
   // ---------------------------
   // Admin view: schema definitions
   // ---------------------------
-  function adminSchemaView(state, tabKey, title) {
+  
+  function makeTypeConfigEditor(field, onChange) {
+    const f = field || {};
+    const mods = (f.mods && typeof f.mods === "object") ? f.mods : {};
+    const base = String(f.type || "text");
+
+    const bases = (App.FieldTypes && App.FieldTypes.listBase) ? App.FieldTypes.listBase() : [];
+    const modsList = (App.FieldTypes && App.FieldTypes.listMods) ? App.FieldTypes.listMods() : [];
+
+    const baseSel = el("select", { class: inputClass(), style:"min-width:180px;" }, []);
+    bases.forEach(b => {
+      const opt = el("option", { value: b.key }, [b.label]);
+      if (String(b.key) === String(base)) opt.selected = true;
+      baseSel.appendChild(opt);
+    });
+    baseSel.addEventListener("change", function () {
+      const next = Object.assign({}, f, { type: baseSel.value });
+      if (typeof onChange === "function") onChange(next);
+    });
+
+    const modsWrap = el("div", { style:"display:flex;gap:60px;align-items:center;" }, []);
+    modsList.forEach(m => {
+      const id = "m_" + m.key + "_" + Math.random().toString(16).slice(2);
+      const cb = el("input", { type:"checkbox", id:id }, []);
+      cb.checked = !!mods[m.key];
+
+      cb.addEventListener("change", function () {
+        const nextMods = Object.assign({}, (f.mods || {}), { [m.key]: cb.checked });
+        Object.keys(nextMods).forEach(k => { if (!nextMods[k]) delete nextMods[k]; });
+        const next = Object.assign({}, f, { mods: nextMods });
+        if (typeof onChange === "function") onChange(next);
+      });
+
+      const lab = el("label", {
+        for:id,
+        style:"display:flex;flex-direction:column;align-items:center;gap:8px;cursor:pointer;min-width:110px;"
+      }, [
+        el("span", { class:"muted", text: m.label }),
+        cb
+      ]);
+      modsWrap.appendChild(lab);
+    });
+
+    const header = el("div", {
+      style:"display:grid;grid-template-columns:220px 1fr;gap:30px;margin-bottom:10px;font-weight:600;"
+    }, [
+      el("div", { text:"Grundtyp" }),
+      el("div", { text:"Attribut" })
+    ]);
+
+    const body = el("div", {
+      style:"display:grid;grid-template-columns:220px 1fr;gap:30px;align-items:center;"
+    }, [
+      el("div", {}, [ baseSel ]),
+      modsWrap
+    ]);
+
+    return el("div", { style:"display:flex;flex-direction:column;gap:12px;padding:12px 0;" }, [ header, body ]);
+  }
+
+function adminSchemaView(state, tabKey, title) {
     const view = byId("usp-view");
     if (!view) return;
     setHtml(view, "");
@@ -233,10 +496,10 @@
       [
         el("button", { class: btnClass("primary"), type:"button", onclick: () => {
           const next = sortFields(schema.fields);
-          next.push({ id: "f_" + Date.now(), name: "Nytt fält", key: "field_" + (next.length+1), type: "text", order: next.length });
+          next.push({ id: "f_" + Date.now(), name: "Nytt fält", type: "text", order: next.length });
           schema.fields = next;
           App.setSchema(tabKey, schema);
-        }}, ["+ Lägg till fält"]),
+        }}, ["+ Ny rad"]),
       ]
     ));
 
@@ -245,8 +508,10 @@
       el("tr", {}, [
         el("th", {}, ["Ordning"]),
         el("th", {}, ["Namn"]),
-        el("th", {}, ["Typ"]),
-        el("th", {}, ["Action"]),
+        el("th", {}, ["Grundtyp"]),
+          el("th", {}, ["Hörnmarkör"]),
+          el("th", {}, ["Initialer"]),
+          el("th", {}, ["Notes"]),
       ])
     ]));
     const tbody = el("tbody", {}, []);
@@ -261,50 +526,41 @@
       fields.forEach((f, idx) => {
         const tr = el("tr", {}, []);
 
+        // Ordning
         tr.appendChild(el("td", {}, [
           el("input", { class: inputClass(), value: String(f.order ?? idx), style:"width:72px;", onchange: (e) => {
-            f.order = parseInt(e.target.value, 10) || idx;
+            f.order = parseInt(e.target.value, 10);
+            if (!Number.isFinite(f.order)) f.order = idx;
             App.setSchema(tabKey, schema);
           }}, [])
         ]));
 
-        tr.appendChild(el("td", {}, [
-          el("input", { class: inputClass(), value: String(f.name || ""), onchange: (e)=>{ f.name=e.target.value; App.setSchema(tabKey, schema);} }, [])
-        ]));
+        // Namn (nyckel). Tillåt edit vid ny fält, men rename blockas i App.setSchema (A).
+        const nameInp = el("input", { class: inputClass(), value: String(f.name || ""), onchange: (e)=>{ f.name=e.target.value; App.setSchema(tabKey, schema);} }, []);
+        const delBtn = el("button", { class:"btn btn-small", type:"button", onclick: () => {
+          const ok = window.confirm("Ta bort fältet?");
+          if (!ok) return;
+          schema.fields = sortFields(schema.fields).filter(x => x !== f);
+          schema.fields.forEach((x,i)=>x.order=i);
+          App.setSchema(tabKey, schema);
+        }}, ["Ta bort"]);
+        tr.appendChild(el("td", {}, [ nameInp ]));
 
-        tr.appendChild(el("td", {}, [
-          el("input", { class: inputClass(), value: String(f.name || ""), onchange: (e)=>{ f.name=e.target.value; App.setSchema(tabKey, schema);} }, [])
-        ]));
+        // Grundtyp + attribut (separata kolumner för tydliga rubriker)
+        const typeSel = makeTypeSelect(f.type || "text", (val) => { f.type = val; persist(); });
 
-        tr.appendChild(el("td", {}, [
-          el("input", { class: inputClass(), value: String(f.type || "text"), style:"width:120px;", onchange:(e)=>{ f.type=e.target.value; App.setSchema(tabKey, schema);} }, [])
-        ]));
+        const tdBase = el("td", {}, [typeSel]);
+        const tdCorner = el("td", {}, [makeModCheckbox(f, "corner", (nf) => { f.mods = nf.mods; persist(); })]);
+        const tdInitials = el("td", {}, [makeModCheckbox(f, "initials", (nf) => { f.mods = nf.mods; persist(); })]);
+        const tdNotes = el("td", {}, [makeModCheckbox(f, "notes", (nf) => { f.mods = nf.mods; persist(); })]);
 
-        tr.appendChild(el("td", { style:"white-space:nowrap;" }, [
-          el("button", { class:"icon-btn", type:"button", onclick: () => {
-            const arr = sortFields(schema.fields);
-            if (idx <= 0) return;
-            const tmp = arr[idx-1]; arr[idx-1]=arr[idx]; arr[idx]=tmp;
-            arr.forEach((x,i)=>x.order=i);
-            schema.fields = arr;
-            App.setSchema(tabKey, schema);
-          }}, ["↑"]),
-          el("button", { class:"icon-btn", type:"button", onclick: () => {
-            const arr = sortFields(schema.fields);
-            if (idx >= arr.length-1) return;
-            const tmp = arr[idx+1]; arr[idx+1]=arr[idx]; arr[idx]=tmp;
-            arr.forEach((x,i)=>x.order=i);
-            schema.fields = arr;
-            App.setSchema(tabKey, schema);
-          }}, ["↓"]),
-          el("button", { class:"btn btn-small", type:"button", onclick: () => {
-            const ok = window.confirm("Ta bort fältet?");
-            if (!ok) return;
-            schema.fields = sortFields(schema.fields).filter(x => x !== f);
-            schema.fields.forEach((x,i)=>x.order=i);
-            App.setSchema(tabKey, schema);
-          }}, ["Ta bort"]),
-        ]));
+        tr.appendChild(tdBase);
+        tr.appendChild(tdCorner);
+        tr.appendChild(tdInitials);
+        tr.appendChild(tdNotes);
+
+        tr.appendChild(el("td", {}, [ delBtn ]));
+
 
         tbody.appendChild(tr);
       });
@@ -339,7 +595,6 @@
                 const table = el("table", { class:"table" }, []);
                 table.appendChild(el("thead", {}, [el("tr", {}, [
                   ...fieldNames.map(n => el("th", {}, [n])),
-                  el("th", {}, ["Action"]),
                 ])]));
                 const tb = el("tbody", {}, []);
                 rows.forEach((r) => {
@@ -466,7 +721,6 @@ function userDataView(state, tabKey, title) {
     table.appendChild(el("thead", {}, [
       el("tr", {}, [
         ...fieldNames.map(n => el("th", {}, [n])),
-        ...(isRoutines ? [] : [el("th", {}, ["Action"])])
       ])
     ]));
 
@@ -486,17 +740,83 @@ function userDataView(state, tabKey, title) {
             return;
           }
           tr.appendChild(el("td", {}, [
-            el("input", {
-              class: inputClass(),
-              value: String((r.fields && r.fields[n]) ?? ""),
-              oninput: (e) => {
+            (function () {
+              const field = (fields || []).find(x => String(x.name || "").trim() === n) || { name: n, type: "text" };
+              const tkey = (App.FieldTypes && App.FieldTypes.normalizeType) ? App.FieldTypes.normalizeType(field.type) : String(field.type || "text");
+
+              // Routines: read-only already handled above.
+              if (App.FieldTypes && typeof App.FieldTypes.renderEditor === "function") {
+                return App.FieldTypes.renderEditor({
+                  baseType: tkey,
+                  mods: (field && field.mods) ? field.mods : {},
+                  value: (r.fields && r.fields[n]) ?? "",
+                  disabled: false,
+                  // base value change
+                  onChange: (val) => {
+                    const st = App.getState();
+                    const cur = (getRowSafe(tabKey, r.id, st) || r);
+                    const next = { id: cur.id, createdAt: cur.createdAt, updatedAt: new Date().toISOString(), archived: !!cur.archived, fields: Object.assign({}, cur.fields || {}) };
+                    const v = (App.FieldTypes.normalizeValue) ? App.FieldTypes.normalizeValue(tkey, val) : val;
+                    next.fields[n] = v;
+                    App.upsertRow(tabKey, next);
+                  },
+                  // corner addon (stored separately)
+                  cornerValue: (r.fields && r.fields[cornerKeyFor(n)]) ?? "",
+                  onCornerChange: ((field && field.mods && field.mods.corner) || tkey === "status") ? (cval) => {
+                    const st = App.getState();
+                    const cur = (getRowSafe(tabKey, r.id, st) || r);
+                    const next = { id: cur.id, createdAt: cur.createdAt, updatedAt: new Date().toISOString(), archived: !!cur.archived, fields: Object.assign({}, cur.fields || {}) };
+                    next.fields[cornerKeyFor(n)] = String(cval || "");
+                    // if base is status, also store in main value for consistency
+                    if (tkey === "status") next.fields[n] = String(cval || "");
+                    App.upsertRow(tabKey, next);
+                  } : undefined,
+                  // initials addon
+                  initialsValue: (r.fields && r.fields[initialsKeyFor(n)]) ?? "--",
+                  onInitialsClick: (field && field.mods && field.mods.initials) ? () => {
+                    const curIni = (r.fields && r.fields[initialsKeyFor(n)]) ?? "--";
+                    const pick = promptPickInitials(curIni);
+                    if (pick === null) return;
+                    const st = App.getState();
+                    const cur = (getRowSafe(tabKey, r.id, st) || r);
+                    const next = { id: cur.id, createdAt: cur.createdAt, updatedAt: new Date().toISOString(), archived: !!cur.archived, fields: Object.assign({}, cur.fields || {}) };
+                    next.fields[initialsKeyFor(n)] = String(pick || "--");
+                    App.upsertRow(tabKey, next);
+                  } : undefined,
+                  // notes addon (log)
+                  notesHas: (function () {
+                    try { const log = readNotesLog((r.fields || {}), n); return Array.isArray(log) && log.length > 0; } catch (e) { return false; }
+                  })(),
+                  onNotesClick: (field && field.mods && field.mods.notes) ? () => {
+                    try {
+                      const st2 = App.getState();
+                      const cur2 = (getRowSafe(tabKey, r.id, st2) || r);
+                      const next2 = { id: cur2.id, createdAt: cur2.createdAt, updatedAt: new Date().toISOString(), archived: !!cur2.archived, fields: Object.assign({}, cur2.fields || {}) };
+
+                      const log = readNotesLog(next2.fields, n);
+                      const add = promptAddNote(log);
+                      if (add === null) return;
+
+                      if (add) {
+                        log.push({ ts: new Date().toISOString(), by: currentInitials(), text: add });
+                        writeNotesLog(next2.fields, n, log);
+                        App.upsertRow(tabKey, next2);
+                      }
+                    } catch (e) { console.error(e); }
+                  } : undefined
+                });}
+
+              // fallback to text input
+              const inp = el("input", { class: inputClass(), value: String((r.fields && r.fields[n]) ?? "") }, []);
+              inp.addEventListener("input", (e) => {
                 const st = App.getState();
-                const cur = (App.getRow(tabKey, r.id, st) || r);
+                const cur = (getRowSafe(tabKey, r.id, st) || r);
                 const next = { id: cur.id, createdAt: cur.createdAt, updatedAt: new Date().toISOString(), archived: !!cur.archived, fields: Object.assign({}, cur.fields || {}) };
                 next.fields[n] = e.target.value;
                 App.upsertRow(tabKey, next);
-              }
-            }, [])
+              });
+              return inp;
+            })()
           ]));
         });
 
