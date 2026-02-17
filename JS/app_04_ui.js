@@ -1512,6 +1512,10 @@ function todoView(state, tabKey, title) {
           return;
         }
 
+        const field = (fields || []).find(x => String(x.name || "").trim() === n) || { name: n, type: "text" };
+        const tkey = (App.FieldTypes && App.FieldTypes.normalizeType) ? App.FieldTypes.normalizeType(field.type) : String(field.type || "text");
+        const overdue = (n === "Klart" && isOverdueDate((r.fields && r.fields[n]) || ""));
+
         const editor = (App.FieldTypes && typeof App.FieldTypes.renderEditor === "function")
           ? App.FieldTypes.renderEditor({
               baseType: tkey,
