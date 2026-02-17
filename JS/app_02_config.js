@@ -27,4 +27,24 @@
   App.Config.getSupabaseKey = function () {
     return App.Config.get("NEXT_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY", "");
   };
+
+
+  // VERSION 69: Data mode toggle (localhost => localStorage, otherwise Supabase)
+  App.Config.isLocalHost = function isLocalHost() {
+    const h = String(location && location.hostname ? location.hostname : "");
+    return (h === "localhost" || h === "127.0.0.1" || h.endsWith(".local"));
+  };
+
+  App.Config.getDataMode = function getDataMode() {
+    return App.Config.isLocalHost() ? "local" : "supabase";
+  };
+
+  // Default Supabase (can be overridden via window.__ENV__)
+  App.Config.getSupabaseUrl = function () {
+    return App.Config.get("NEXT_PUBLIC_SUPABASE_URL", "https://nchgudsqleylfdysgabi.supabase.co");
+  };
+  App.Config.getSupabaseKey = function () {
+    return App.Config.get("NEXT_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY", "sb_publishable_TBIHlzs-Cw-fJfjUvkzzfw_mhrTLuLw");
+  };
+
 })();

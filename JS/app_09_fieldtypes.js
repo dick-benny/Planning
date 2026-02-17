@@ -1,3 +1,4 @@
+// [fieldtypes v111]
 /* app_09_fieldtypes_07.js
    Dynamic FieldTypes: base + addons (mods)
 
@@ -145,7 +146,7 @@
 
   function renderNotesIcon(ctx) {
     if (!ctx || typeof ctx.onNotesClick !== "function") return null;
-    const cls = "btn note-icon" + (ctx.notesHas ? " is-notes" : "");
+    const cls = "note-icon" + (ctx.notesHas ? " is-notes" : "");
     const btn = el("button", { class: cls, type:"button" }, ["📝"]);
     btn.addEventListener("click", function (e) {
       e.preventDefault(); e.stopPropagation();
@@ -209,8 +210,11 @@
     const ring = renderInitialsRing(ctx);
     if (ring) wrap.appendChild(ring);
 
-    const notesBtn = renderNotesIcon(ctx);
-    if (notesBtn) wrap.appendChild(notesBtn);
+    // Notes icon only when there is no initials addon (notes via right-click on initials)
+    if (!ring) {
+      const notesBtn = renderNotesIcon(ctx);
+      if (notesBtn) wrap.appendChild(notesBtn);
+    }
 
     return wrap;
   }
@@ -220,10 +224,29 @@
     const disabled = !!(ctx && ctx.disabled);
     const value = String((ctx && ctx.value) ?? "");
     const placeholder = (ctx && ctx.placeholder) ? String(ctx.placeholder) : "";
-    const input = el("input", { class:"act-value-input", value, placeholder, disabled }, []);
-    input.addEventListener("input", function () {
+
+    const input = el("input", {
+      class:"act-value-input",
+      type:"text",
+      value,
+      placeholder,
+      disabled,
+      style:"width:100%;min-width:12ch;"
+    }, []);
+
+    let t = null;
+    function flush() {
+      if (t) { clearTimeout(t); t = null; }
       if (ctx && typeof ctx.onChange === "function") ctx.onChange(input.value);
+    }
+
+    input.addEventListener("input", function () {
+      if (disabled) return;
+      if (t) clearTimeout(t);
+      t = setTimeout(flush, 250);
     });
+    input.addEventListener("blur", function () { flush(); });
+
     return wrapActField(input, ctx);
   }
 
@@ -231,8 +254,8 @@
     const disabled = !!(ctx && ctx.disabled);
     const value = normalizeValue("date", ctx && ctx.value);
 
-    const display = el("div", { class:"act-date-display", text: value || "-- -- --" }, []);
-    const picker = el("input", { class:"act-date-picker", type:"date", value, disabled }, []);
+    const display = el("div", { class:"act-date-display", text: value || "-- -- --", style:"width:15ch;min-width:15ch;max-width:15ch;font-size:0.85em;text-align:center;" }, []);
+    const picker = el("input", { class:"act-date-picker", type:"date", value, disabled, style:"width:15ch;min-width:15ch;max-width:15ch;font-size:0.85em;text-align:center;" }, []);
 
     function openPicker() {
       if (disabled) return;
@@ -305,6 +328,52 @@
     return wrapActField(sel, ctx);
   }
 
+  // VERSION 103: ToDo kategori dropdown (fixed list)
+  
+  // VERSION 109: Projekt kategori dropdown (fixed list)
+  const PROJECT_CATEGORIES = ["kundprojekt","volymprojekt","samarbetsprojekt"];
+
+  function renderProjektkategori(ctx) {
+    const disabled = !!(ctx && ctx.disabled);
+    const value = String(ctx && ctx.value != null ? ctx.value : "");
+    const sel = el("select", {
+      class:"input project-cat",
+      style:"width:17ch;min-width:17ch;max-width:17ch;",
+      disabled: disabled ? "disabled" : null
+    }, [
+      el("option", { value:"" }, ["Välj"]),
+      ...PROJECT_CATEGORIES.map(v => el("option", { value:v }, [v]))
+    ]);
+    sel.value = value;
+    sel.addEventListener("change", function(){
+      if (ctx && typeof ctx.onChange === "function") ctx.onChange(sel.value);
+    });
+    sel.addEventListener("click", function(e){ e.stopPropagation(); });
+    return wrapActField(sel, Object.assign({}, ctx || {}, { value }));
+  }
+
+const TODO_CATEGORIES = ["Allmänt","Info","Shopify-B2C","Shopify-B2B","Logistik","Privat"];
+
+  function renderTodoKategori(ctx) {
+    const disabled = !!(ctx && ctx.disabled);
+    const value = String(ctx && ctx.value != null ? ctx.value : "");
+    const sel = el("select", {
+      class:"input todo-cat",
+      style:"width:17ch;min-width:17ch;max-width:17ch;",
+      disabled: disabled ? "disabled" : null
+    }, [
+      el("option", { value:"" }, [""]),
+      ...TODO_CATEGORIES.map(v => el("option", { value:v }, [v]))
+    ]);
+    sel.value = value;
+    sel.addEventListener("change", function(){
+      if (ctx && typeof ctx.onChange === "function") ctx.onChange(sel.value);
+    });
+    sel.addEventListener("click", function(e){ e.stopPropagation(); });
+    return wrapActField(sel, Object.assign({}, ctx || {}, { value }));
+  }
+
+
   function renderEditor(ctx) {
     const base = normalizeBaseType(ctx && (ctx.baseType || ctx.type));
     const val = normalizeValue(base, ctx && ctx.value);
@@ -313,6 +382,8 @@
     if (base === "date") return renderDate(next);
     if (base === "week") return renderWeek(next);
     if (base === "produktkategori") return renderProduktkategori(next);
+    if (base === "projektkategori") return renderProjektkategori(next);
+    if (base === "todokategori") return renderTodoKategori(next);
     // status base uses text-less field; the corner is the editor itself
     if (base === "status") return wrapActField(el("div", { class:"muted", text:"" }, []), next);
     return renderText(next);
@@ -324,6 +395,7 @@
     { key:"date", label:"Datum" },
     { key:"week", label:"Vecka" },
     { key:"produktkategori", label:"Produktkategori" },
+    { key:"todokategori", label:"ToDo-kategori" },
   ];
 
   const modList = [
@@ -343,4 +415,4 @@
 
   App.FieldTypes.renderEditor = function (ctx) { return renderEditor(ctx); };
 
-})();
+})()

@@ -1,4 +1,4 @@
-/* app_01_bootstrap_68.js
+/* app_01_bootstrap_71.js
    USP restart architecture (role-first, tab-first)
    - No import/export
    - Single source of truth: state.ui.tab + App.role(state)
@@ -23,6 +23,10 @@
   // Storage keys
   const LS_STATE = "usp_state_latest_v2";
   const LS_USER = "usp_user_v1";
+
+  function getDataMode(){
+    try { return (App.Config && App.Config.getDataMode) ? App.Config.getDataMode() : "local"; } catch(e){ return "local"; }
+  }
 
   // ---------------------------
   // Utilities
@@ -235,7 +239,9 @@
 
     const SEL = "usp_selected_user_id";
     let sel = "";
-    try { sel = String(localStorage.getItem(SEL) || ""); } catch (e) { sel = ""; }
+    if (getDataMode() === "local") {
+      try { sel = String(localStorage.getItem(SEL) || ""); } catch (e) { sel = ""; }
+    }
 
     let user = null;
     if (sel) user = dir.find(u => u && String(u.id) === sel) || null;
@@ -243,7 +249,7 @@
 
     if (!user) user = { id: uid("u"), email: "d.eriksson@cappelendimyr.com", name: "Dick Eriksson", createdAt: nowIso() };
 
-    try { localStorage.setItem(SEL, String(user.id)); } catch (e) {}
+    if (getDataMode() === "local") { try { localStorage.setItem(SEL, String(user.id)); } catch (e) {} }
     return user;
   }
 
@@ -318,10 +324,25 @@
   App.getState = function getState() { return _state; };
 
   function persistState(st) {
-    try { localStorage.setItem(LS_STATE, JSON.stringify(st)); } catch (e) {}
+    const m = getDataMode();
+    if (m === "local") {
+      try { localStorage.setItem(LS_STATE, JSON.stringify(st)); } catch (e) {}
+      return;
+    }
+    // Supabase mode: never persist app data to localStorage
+    try {
+      if (App.DB && typeof App.DB.saveState === "function") {
+        App.DB.saveState(st).catch(function (e) { console.warn("DB.saveState failed", e); });
+      }
+    } catch (e) { console.warn("persistState supabase failed", e); }
   }
 
   function loadState() {
+    const m = getDataMode();
+    if (m !== "local") {
+      // Supabase mode: start from default; remote hydration happens after UI mount.
+      return defaultState();
+    }
     const raw = localStorage.getItem(LS_STATE);
     const st = safeJsonParse(raw, null);
     if (!st || typeof st !== "object") return defaultState();
@@ -665,6 +686,26 @@ App.listUsers = function listUsers(state) {
     // First render
     if (USP.UI && typeof USP.UI.render === "function") {
       USP.UI.render(_state);
+
+    // Supabase mode: hydrate state from DB after first paint
+    try {
+      if (getDataMode() !== "local" && App.DB && typeof App.DB.loadState === "function") {
+        App.DB.loadState().then(function (remote) {
+          if (!remote || typeof remote !== "object") return;
+          // Merge remote into current state (keep session/auth from local init)
+          const cur = App.getState();
+          const merged = deepClone(cur);
+          if (remote.schemas) merged.schemas = remote.schemas;
+          if (remote.data) merged.data = remote.data;
+          if (remote.settings) merged.settings = remote.settings;
+          merged.updatedAt = remote.updatedAt || merged.updatedAt || nowIso();
+          App.commitState(merged);
+        }).catch(function (e) {
+          console.warn("DB.loadState failed", e);
+        });
+      }
+    } catch (e) { console.warn("hydrateFromRemote setup failed", e); }
+
     }
 
     return _state;
@@ -676,6 +717,26 @@ App.listUsers = function listUsers(state) {
     _state = ensureStateInvariants(defaultState());
     persistState(_state);
     if (USP.UI && typeof USP.UI.render === "function") USP.UI.render(_state);
+
+    // Supabase mode: hydrate state from DB after first paint
+    try {
+      if (getDataMode() !== "local" && App.DB && typeof App.DB.loadState === "function") {
+        App.DB.loadState().then(function (remote) {
+          if (!remote || typeof remote !== "object") return;
+          // Merge remote into current state (keep session/auth from local init)
+          const cur = App.getState();
+          const merged = deepClone(cur);
+          if (remote.schemas) merged.schemas = remote.schemas;
+          if (remote.data) merged.data = remote.data;
+          if (remote.settings) merged.settings = remote.settings;
+          merged.updatedAt = remote.updatedAt || merged.updatedAt || nowIso();
+          App.commitState(merged);
+        }).catch(function (e) {
+          console.warn("DB.loadState failed", e);
+        });
+      }
+    } catch (e) { console.warn("hydrateFromRemote setup failed", e); }
+
   };
 
 })();

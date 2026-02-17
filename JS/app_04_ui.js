@@ -1,4 +1,4 @@
-/* app_04_ui_90.js
+/* app_04_ui_92.js
    USP UI (design-restored via style.css classes)
    - Keeps v60+ deterministic router: tab + role -> view
    - Uses existing CSS classes (.topbar, .tabs, .hero, .table-wrap, etc.)
@@ -15,6 +15,9 @@
   // Settings popover (compact)
   // ---------------------------
   let _settingsOpen = false;
+  let _routinesSchemaEnsured = false;
+  let _renderTick = 0;
+  let _todoRenderedTick = -1;
 
   function closeSettingsPopover() {
     _settingsOpen = false;
@@ -64,6 +67,11 @@
 
     const row = el("div", { style:"display:flex;gap:10px;flex-wrap:wrap;justify-content:flex-end;" }, []);
     if (role === "admin") {
+      row.appendChild(el("button", { class:"btn btn-danger", type:"button", onclick: () => {
+        if (!confirm("Töm all lokal data (localStorage)? Detta kan inte ångras.")) return;
+        try { localStorage.clear(); } catch(e) { console.error(e); }
+        location.reload();
+      } }, ["Clean local data"]));
       row.appendChild(el("button", { class:"btn btn-secondary", type:"button", onclick: () => { closeSettingsPopover(); openManageUsers(App.getState()); } }, ["Manage users"]));
     }
     row.appendChild(el("button", { class:"btn btn-secondary", type:"button", onclick: () => { closeSettingsPopover(); if (App.toggleUser) App.toggleUser(); } }, ["Change user (Dick ↔ Benny)"]));
@@ -73,7 +81,285 @@
   }
   const App = USP.App;
 
-  // ---------------------------
+  // =============================
+  // VERSION 200
+  // Fixed Tables Registry
+  // =============================
+  const FIXED_TABLES = {};
+
+  function registerFixedTables() {
+    if (FIXED_TABLES._initialized) return;
+    FIXED_TABLES._initialized = true;
+
+    if (App && App.Tabs) {
+      if (App.Tabs.TODO) {
+        FIXED_TABLES[App.Tabs.TODO] = {
+          type: "todo"
+        };
+      }
+      if (App.Tabs.PROJECT) {
+        FIXED_TABLES[App.Tabs.PROJECT] = { type: "project" };
+      }
+      if (App.Tabs.ROUTINES) {
+        FIXED_TABLES[App.Tabs.ROUTINES] = {
+          type: "routines"
+        };
+      }
+    }
+  }
+
+
+
+  
+// ---------------------------
+// Fixed Rutiner schema (Rutin + Steg1..Steg5, text + notes)
+// VERSION 95
+// ---------------------------
+let _fixingRoutinesSchema = false;
+
+function fixedRoutinesSchema() {
+  const cols = ["Rutin", "Steg1", "Steg2", "Steg3", "Steg4", "Steg5"];
+  return {
+    version: 1,
+    fields: cols.map((name, i) => ({
+      id: "r_" + i,
+      order: i,
+      name,
+      type: "text",
+      mods: { notes: true }
+    }))
+  };
+}
+
+function ensureFixedRoutinesSchema(tabKey, state) {
+  // Prevent infinite loops if setSchema triggers a rerender that calls this again.
+  if (_fixingRoutinesSchema) return;
+
+  try {
+    if (String(tabKey) !== String(App.Tabs.ROUTINES)) return;
+
+    const st = state || App.getState();
+    const cur = App.getSchema(tabKey, st) || {};
+    const want = fixedRoutinesSchema();
+
+    const curFields = Array.isArray(cur.fields) ? cur.fields : [];
+    const wantFields = want.fields;
+
+    // Fast check: count + names
+    const sameCount = curFields.length === wantFields.length;
+    const sameNames =
+      sameCount &&
+      wantFields.every((wf, idx) => String((curFields[idx] || {}).name || "") === wf.name);
+
+    // Check whether any field needs patching (type/notes/order)
+    let needsPatch = !sameCount || !sameNames;
+
+    if (!needsPatch) {
+      for (let i = 0; i < wantFields.length; i++) {
+        const f = curFields[i] || {};
+        const hasNotes = !!(f.mods && f.mods.notes);
+        const typeOk = String(f.type || "") === "text";
+        const orderOk = Number.isFinite(f.order) ? f.order === i : true;
+        if (!hasNotes || !typeOk || !orderOk) {
+          needsPatch = true;
+          break;
+        }
+      }
+    }
+
+    if (!needsPatch) return;
+
+    _fixingRoutinesSchema = true;
+
+    const patchedFields = wantFields.map((wf, idx) => {
+      const f = curFields[idx] || {};
+      return Object.assign({}, f, {
+        id: f.id || wf.id,
+        order: idx,
+        name: wf.name,
+        type: "text",
+        mods: { notes: true }
+      });
+    });
+
+    App.setSchema(
+      tabKey,
+      Object.assign({}, cur, { version: cur.version || 1, fields: patchedFields })
+    );
+  } catch (e) {
+    console.warn("ensureFixedRoutinesSchema failed", e);
+  } finally {
+    _fixingRoutinesSchema = false;
+  }
+}
+
+// ---------------------------
+// Fixed ToDo schema (Kategori, Beskrivning, Klart)
+// VERSION 99
+// ---------------------------
+function fixedTodoSchema() {
+  return {
+    version: 1,
+    fields: [
+      { id:"t_0", order:0, name:"Kategori", type:"todokategori", mods:{} },
+      { id:"t_1", order:1, name:"Beskrivning", type:"text", mods:{ initials:true, notes:true, notesOnInitialsRightClick:true } },
+      { id:"t_2", order:2, name:"Klart", type:"date", mods:{} },
+    ]
+  };
+}
+
+let _fixingTodoSchema = false;
+function ensureFixedTodoSchema(tabKey, state) {
+  try {
+    if (String(tabKey) !== String(App.Tabs.TODO)) return;
+    if (_fixingTodoSchema) return;
+    _fixingTodoSchema = true;
+
+    const st = state || App.getState();
+    const cur = App.getSchema(tabKey, st) || {};
+    const want = fixedTodoSchema();
+    const curFields = Array.isArray(cur.fields) ? cur.fields : [];
+    const wantFields = want.fields;
+
+    const sameCount = curFields.length === wantFields.length;
+    const sameNames = sameCount && wantFields.every((wf, idx) => String((curFields[idx]||{}).name||"") === wf.name);
+    const sameTypes = sameCount && wantFields.every((wf, idx) => String((curFields[idx]||{}).type||"") === wf.type);
+
+    if (!sameCount || !sameNames || !sameTypes) {
+      App.setSchema(tabKey, want);
+      return;
+    }
+
+    // ensure mods for description (initials + notes + rightclick behavior)
+    const patched = wantFields.map((wf, idx) => {
+      const f = curFields[idx] || {};
+      return Object.assign({}, f, {
+        id: f.id || wf.id,
+        order: idx,
+        name: wf.name,
+        type: wf.type,
+        mods: Object.assign({}, (f.mods||{}), (wf.mods||{}))
+      });
+    });
+
+    App.setSchema(tabKey, Object.assign({}, cur, { version: cur.version || 1, fields: patched }));
+  } catch (e) {
+    console.warn("ensureFixedTodoSchema failed", e);
+  } finally {
+    _fixingTodoSchema = false;
+  }
+}
+
+
+// ---------------------------
+// Fixed Projekt schema (Projektnamn, Kategori, Start, Aktuell, Nästa, Kommande, Slut)
+// VERSION 226
+// ---------------------------
+function fixedProjectSchema() {
+  return {
+    version: 1,
+    fields: [
+      { id:"p_0", order:0, name:"Projektnamn", type:"text", mods:{ initials:true, notes:true, notesOnInitialsRightClick:true } },
+      { id:"p_1", order:1, name:"Kategori", type:"projektkategori", mods:{} },
+      { id:"p_2", order:2, name:"Start", type:"date", mods:{} },
+      { id:"p_3", order:3, name:"Aktuell", type:"text", mods:{ initials:true, notes:true, notesOnInitialsRightClick:true, corner:true } },
+      { id:"p_4", order:4, name:"Nästa", type:"text", mods:{ initials:true, notes:true, notesOnInitialsRightClick:true } },
+      { id:"p_5", order:5, name:"Kommande", type:"text", mods:{ initials:true, notes:true, notesOnInitialsRightClick:true } },
+      { id:"p_6", order:6, name:"Slut", type:"date", mods:{} },
+    ]
+  };
+}
+
+let _fixingProjectSchema = false;
+function ensureFixedProjectSchema(tabKey, state) {
+  try {
+    if (String(tabKey) !== String(App.Tabs.PROJECT)) return;
+    if (_fixingProjectSchema) return;
+    _fixingProjectSchema = true;
+
+    const current = App.getSchema(tabKey, state);
+    const desired = fixedProjectSchema();
+
+    const ok = current && Array.isArray(current.fields) && current.fields.length === desired.fields.length
+      && current.fields.map(f => f.name).join("|") === desired.fields.map(f => f.name).join("|");
+
+    if (!ok) {
+      App.setSchema(tabKey, desired, state);
+    }
+  } catch (e) {
+    console.error("ensureFixedProjectSchema failed", e);
+  } finally {
+    _fixingProjectSchema = false;
+  }
+}
+
+
+const TODO_CATEGORIES = ["Allmänt","Info","Shopify-B2C","Shopify-B2B","Logistik","Privat"];
+
+function isoWeek(d) {
+  const dt = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+  const day = dt.getUTCDay() || 7;
+  dt.setUTCDate(dt.getUTCDate() + 4 - day);
+  const yearStart = new Date(Date.UTC(dt.getUTCFullYear(), 0, 1));
+  return Math.ceil((((dt - yearStart) / 86400000) + 1) / 7);
+}
+
+function weekRangeMondaySunday(d) {
+  const x = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  const day = x.getDay() || 7; // Mon=1..Sun=7
+  const monday = new Date(x); monday.setDate(x.getDate() - (day - 1));
+  const sunday = new Date(monday); sunday.setDate(monday.getDate() + 6);
+  function fmt(dt) {
+    const yyyy = dt.getFullYear();
+    const mm = String(dt.getMonth()+1).padStart(2,"0");
+    const dd = String(dt.getDate()).padStart(2,"0");
+    return `${yyyy}-${mm}-${dd}`;
+  }
+  return { monday, sunday, from: fmt(monday), to: fmt(sunday) };
+}
+
+function todoOwnerKey() {
+  const u = (App.getActingUser ? App.getActingUser(App.getState()) : null) || {};
+  return String(u.email || u.id || "");
+}
+
+function todoWeekHousekeeping(state) {
+  const st = state || App.getState();
+  const now = new Date();
+  const w = isoWeek(now);
+  const prev = Number((st.session && st.session.todoWeek) || 0);
+  if (prev === w) return;
+
+  // When week changes: archive all green rows
+  if (prev > 0) {
+    const rows = (App.listRows(App.Tabs.TODO, st) || []);
+    rows.forEach(r => {
+      if (r && !r.archived && r.meta && r.meta.green) {
+        App.archiveRow(App.Tabs.TODO, r.id);
+      }
+    });
+  }
+
+  // persist new week number
+  const next = App.getState();
+  next.session = next.session || {};
+  next.session.todoWeek = w;
+  App.commitState(next);
+}
+
+function isOverdueDate(val) {
+  if (!val) return false;
+  const d = new Date(String(val));
+  if (isNaN(d.getTime())) return false;
+  const now = new Date();
+  // Compare date-only
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const dd = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  return dd < today;
+}
+
+
+// ---------------------------
   // Field type registry integration (Admin schema dropdown)
   // ---------------------------
   function getFieldTypeOptions() {
@@ -316,6 +602,35 @@
   // ---------------------------
   UI.mountBase = function mountBase() {
     const root = ensureRoot();
+
+    
+    // Remove duplicate view wrappers if any (can happen after older versions appended layout twice)
+    try {
+      const wraps = root.querySelectorAll(".table-wrap");
+      if (wraps && wraps.length > 1) {
+        for (let i = 1; i < wraps.length; i++) wraps[i].remove();
+      }
+    } catch(e) {}
+// Always enforce a single root + single view/topbar to prevent duplicate renders.
+    try {
+      const apps = document.querySelectorAll("#app");
+      if (apps && apps.length > 1) {
+        for (let i = 1; i < apps.length; i++) apps[i].remove();
+      }
+    } catch (e) {}
+
+    try {
+      const tAll = document.querySelectorAll("#usp-topbar");
+      if (tAll && tAll.length > 1) {
+        for (let i = 1; i < tAll.length; i++) tAll[i].remove();
+      }
+      const vAll = document.querySelectorAll("#usp-view");
+      if (vAll && vAll.length > 1) {
+        for (let i = 1; i < vAll.length; i++) vAll[i].remove();
+      }
+    } catch (e) {}
+
+    // If layout already exists, reuse it.
     if (byId("usp-topbar") && byId("usp-view")) return;
 
     setHtml(root, "");
@@ -327,6 +642,7 @@
 
     root.appendChild(topbar);
     root.appendChild(viewWrap);
+
   };
 
   // ---------------------------
@@ -336,6 +652,7 @@
     if (key === App.Tabs.DEV) return "UTVECKLING";
     if (key === App.Tabs.PRODUCT) return "SÄLJ";
     if (key === App.Tabs.TODO) return "TODO";
+    if (key === App.Tabs.PROJECT) return "PROJEKT";
     if (key === App.Tabs.ROUTINES) return "RUTINER";
     return String(key || "").toUpperCase();
   }
@@ -355,7 +672,7 @@
 
     const tabs = el("div", { class: "tabs", id: "tabs" }, []);
     const current = App.getTab(state);
-    [App.Tabs.DEV, App.Tabs.PRODUCT, App.Tabs.TODO, App.Tabs.ROUTINES].forEach((k) => {
+    [App.Tabs.DEV, App.Tabs.PRODUCT, App.Tabs.TODO, App.Tabs.PROJECT, App.Tabs.ROUTINES].forEach((k) => {
       tabs.appendChild(el("button", {
         class: "tab " + (current === k ? "is-active" : ""),
         type: "button",
@@ -559,7 +876,7 @@ function adminSchemaView(state, tabKey, title) {
         tr.appendChild(tdInitials);
         tr.appendChild(tdNotes);
 
-        tr.appendChild(el("td", {}, [ delBtn ]));
+        tr.appendChild(el("td", { style:"text-align:right;padding-left:18px;white-space:nowrap;width:8ch;" }, [ delBtn ]));
 
 
         tbody.appendChild(tr);
@@ -594,7 +911,7 @@ function adminSchemaView(state, tabKey, title) {
               (function(){
                 const table = el("table", { class:"table" }, []);
                 table.appendChild(el("thead", {}, [el("tr", {}, [
-                  ...fieldNames.map(n => el("th", {}, [n])),
+                  ...fieldNames.map(n => el("th", { style: (n==="Kategori" ? "width:17ch;" : (n==="Klart" ? "width:12ch;" : null)) }, [n])),
                 ])]));
                 const tb = el("tbody", {}, []);
                 rows.forEach((r) => {
@@ -682,27 +999,43 @@ function adminSchemaView(state, tabKey, title) {
       return;
     }
   }
-function userDataView(state, tabKey, title) {
+function userDataView(state, tabKey, title, opts) {
     const view = byId("usp-view");
     if (!view) return;
     setHtml(view, "");
 
+    const isRoutines = (tabKey === App.Tabs.ROUTINES);
+      if (isRoutines && !_routinesSchemaEnsured) { _routinesSchemaEnsured = true; ensureFixedRoutinesSchema(tabKey, state); }
+
+    // Re-read schema after potential routines patch
     const schema = App.getSchema(tabKey, state);
     const fields = sortFields(schema.fields || []);
-    const isRoutines = (tabKey === App.Tabs.ROUTINES);
+
+    const routinesEditable = isRoutines && !!(opts && opts.routinesEditable);
+    const routinesReadOnly = isRoutines && !routinesEditable;
 
     // User works with data; routines are read-only.
     const rowsAll = (App.listRows(tabKey, state) || []);
     const rows = rowsAll.filter(r => !r.archived);
 
-    // Buttons: +Ny rad + Arkiv (DEV/PRODUCT/TODO), no archive/done/actions for routines
+    // Buttons
+    // - Rutiner: admin kan skapa nya rutiner (+ Ny rad). User har inga actions.
+    // - Övriga tabs: + Ny rad + Arkiv
     const heroButtons = [];
-    if (!isRoutines) {
+    if (isRoutines) {
+      if (routinesEditable) {
+        heroButtons.push(el("button", { class: btnClass("primary"), type:"button", onclick: () => {
+          const base = { id: "row_" + Date.now(), createdAt: new Date().toISOString(), fields: {} };
+          fields.forEach(f => { const k = String(f.name || "").trim(); if (k) base.fields[k] = ""; });
+          App.upsertRow(tabKey, base);
+        }}, ["+ Ny rad"]));
+      }
+    } else {
       heroButtons.push(el("button", { class: btnClass("primary"), type:"button", onclick: () => {
         const base = { id: "row_" + Date.now(), createdAt: new Date().toISOString(), fields: {} };
         fields.forEach(f => { const k = String(f.name || "").trim(); if (k) base.fields[k] = ""; });
         App.upsertRow(tabKey, base);
-      }}, ["+ Ny rad"]));
+      }}, [ (tabKey === (App.Tabs && App.Tabs.DEV ? App.Tabs.DEV : "dev") ? "+ Ny Utveckling" : (tabKey === (App.Tabs && App.Tabs.PRODUCT ? App.Tabs.PRODUCT : "product") ? "+ Ny Produkt" : "+ Ny rad")) ]));
 
       heroButtons.push(el("button", { class: btnClass("secondary"), type:"button", onclick: () => {
         openArchiveModal(App.getState(), tabKey, title);
@@ -711,16 +1044,16 @@ function userDataView(state, tabKey, title) {
 
     view.appendChild(hero(
       title,
-      isRoutines ? "Rutiner är en passiv beskrivning som kan läsas av alla." : "Här jobbar user med data. Admin definierar fälten i samma tab.",
+      isRoutines ? (routinesEditable ? "Admin skapar rutiner (ny rutin = Ny rad). User kan bara läsa." : "Rutiner är en passiv beskrivning som kan läsas av alla.") : "Här jobbar user med data. Admin definierar fälten i samma tab.",
       heroButtons
     ));
 
     const fieldNames = fields.map(f => String(f.name || "").trim()).filter(Boolean);
 
-    const table = el("table", { class:"table" }, []);
+    const table = el("table", { class: isRoutines ? "table routines-table" : "table" }, []);
     table.appendChild(el("thead", {}, [
       el("tr", {}, [
-        ...fieldNames.map(n => el("th", {}, [n])),
+        ...fieldNames.map(n => el("th", { style: (n==="Kategori" ? "width:17ch;" : (n==="Klart" ? "width:12ch;" : null)) }, [n])),
       ])
     ]));
 
@@ -735,7 +1068,7 @@ function userDataView(state, tabKey, title) {
       freshRows.forEach((r) => {
         const tr = el("tr", {}, []);
         fieldNames.forEach((n) => {
-          if (isRoutines) {
+          if (routinesReadOnly) {
             tr.appendChild(el("td", {}, [String((r.fields && r.fields[n]) ?? "")]));
             return;
           }
@@ -841,6 +1174,901 @@ function userDataView(state, tabKey, title) {
 
     rerender();
   }
+
+function todoView(state, tabKey, title) {
+    // VERSION 106: ensure ToDo view is not duplicated
+    try {
+      const host = document.getElementById("usp-view");
+      if (host) {
+        const olds = host.querySelectorAll(".todo-root");
+        olds.forEach(n => n.remove());
+      }
+    } catch(e) {}
+
+  const views = (document && document.querySelectorAll) ? document.querySelectorAll("#usp-view") : [];
+  const view = views && views.length ? views[0] : byId("usp-view");
+  if (!view) return;
+  try { (views || []).forEach(v => setHtml(v, "")); } catch (e) { setHtml(view, ""); }
+
+  if (_todoRenderedTick === _renderTick) return;
+  _todoRenderedTick = _renderTick;
+
+  ensureFixedTodoSchema(tabKey, state);
+  // housekeeping on week change
+  try { todoWeekHousekeeping(state); } catch (e) {}
+
+  const st = App.getState();
+  const schema = App.getSchema(tabKey, st);
+  const fields = sortFields(schema.fields || []);
+  const fieldNames = fields.map(f => String(f.name||"").trim()).filter(Boolean);
+
+  // Filters
+  const acting = (App.getActingUser ? App.getActingUser(st) : st.user) || {};
+  const ownerKey = String(acting.email || acting.id || "");
+
+  const session = (st.session = st.session || {});
+  const filterCat = String(session.todoFilterCat || "Alla");
+  const onlyMine = !!session.todoOnlyMine;
+  const showLatest = !!session.todoShowLatest;
+
+  const now = new Date();
+  const weekNo = isoWeek(now);
+  const wr = weekRangeMondaySunday(now);
+
+  
+
+  // ToDo kategori-filter (Alla + kategorier)
+  const todoCats = ["Allmänt","Info","Shopify-B2C","Shopify-B2B","Logistik","Privat"];
+  const filterOpts = ["Alla"].concat(todoCats);
+  const filterSelect = el("select", { class:"input", style:"width:17ch;min-width:17ch;max-width:17ch;", onchange: (ev) => {
+      const next = App.getState();
+      next.session = next.session || {};
+      next.session.todoFilterCat = String(ev.target.value || "Alla");
+      next.session.todoRecent = false;
+      App.commitState(next);
+    }}, filterOpts.map(v => el("option", { value: v, selected: String(v)===String(filterCat) ? "selected" : null }, [v])));
+
+  const filterRow = el("div", { style:"display:flex;align-items:center;gap:12px;margin:10px 0 18px 0;" }, [
+    el("div", { class:"muted", style:"font-weight:600;" }, ["Filter:"]),
+    filterSelect
+  ]);
+// Header (week info left, actions right)
+  const heroButtons = [
+    el("button", { class: btnClass("secondary"), type:"button", onclick: () => {
+      const st = App.getState();
+      const st2 = (App.cloneState ? App.cloneState(st) : JSON.parse(JSON.stringify(st)));
+      st2.session = st2.session || {};
+      st2.session.todoRecent = true;
+      // In recent mode, use Alla by default
+      st2.session.todoFilterCat = "Alla";
+      App.commitState(st2);
+    }}, ["Senaste"]),
+    el("button", { class: btnClass("secondary"), type:"button", onclick: () => {
+      const next = App.getState();
+      next.session = next.session || {};
+      next.session.todoOnlyMine = !next.session.todoOnlyMine;
+      App.commitState(next);
+    }}, ["Mina sidor"]),
+    el("button", { class: btnClass("primary"), type:"button", onclick: () => { openNewTodoModal(tabKey, App.getState()); } }, ["Ny ToDo"]),
+    el("button", { class: btnClass("secondary"), type:"button", onclick: () => {
+      openArchiveModal(App.getState(), tabKey, title);
+    }}, ["Arkiv"])
+  ];
+
+  const headerLeft = el("div", { style:"display:flex;flex-direction:column;gap:6px;" }, [
+    el("div", { style:"display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;" }, [
+      el("div", { class:"hero-title", style:"font-size:40px;line-height:1.05;font-weight:800;" }, [title]),
+      el("div", { class:"hero-subtitle", style:"font-size:20px;font-weight:700;" }, ["Vecka " + String(weekNo)])
+    ]),
+    el("div", { class:"hint", style:"font-size:12px;margin-left:0;" }, [`${wr.from} – ${wr.to}`])
+  ]);
+
+  const headerRight = el("div", { style:"display:flex;gap:12px;flex-wrap:wrap;justify-content:flex-end;margin-left:auto;" }, heroButtons);
+
+  const header = el("div", { class:"hero", style:"display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap;" }, [
+    headerLeft,
+    headerRight
+  ]);
+
+  view.appendChild(header);
+  view.appendChild(filterRow);
+
+  const table = el("table", { class:"table todo-table" }, []);
+  table.appendChild(el("thead", {}, [
+    el("tr", {}, [
+      ...fieldNames.map(n => el("th", { style: (n==="Kategori" ? "width:17ch;" : (n==="Klart" ? "width:12ch;" : null)) }, [n])),
+      el("th", { style:"text-align:right;width:8ch;" }, [""])
+    ])
+  ]));
+
+  const tbody = el("tbody", {}, []);
+  table.appendChild(tbody);
+  view.appendChild(table);
+
+  function filterRows(allRows) {
+    let rows = (allRows || []).filter(r => r && !r.archived);
+    const isNew = (r) => !!(r && r.meta && r.meta._new);
+
+    // Privacy: Privat only visible to owner
+    rows = rows.filter(r => {
+      const cat = String((r.fields && r.fields["Kategori"]) || "");
+      if (cat !== "Privat") return true;
+      return String((r.meta && r.meta.owner) || "") === ownerKey;
+    });
+
+    // Category filter: if filter != "Alla", show only matching Kategori
+    if (filterCat && filterCat !== "Alla") {
+      rows = rows.filter(r => String((r.fields && r.fields["Kategori"]) || "") === filterCat);
+    } else {
+      // "Alla": include everything except other people's Privat (already handled above)
+      rows = rows.filter(r => String((r.fields && r.fields["Kategori"]) || "") !== "Privat" || String((r.meta && r.meta.owner)||"")===ownerKey);
+    }
+
+    if (onlyMine) {
+      rows = rows.filter(r => String((r.meta && r.meta.owner) || "") === ownerKey);
+    }
+
+    if (showLatest) {
+      const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      const yesterday = new Date(today); yesterday.setDate(today.getDate()-1);
+      rows = rows.filter(r => {
+        const ts = (r.updatedAt || r.createdAt || "");
+        const d = new Date(String(ts));
+        if (isNaN(d.getTime())) return false;
+        const dd = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+        return dd.getTime() === today.getTime() || dd.getTime() === yesterday.getTime();
+      });
+    }
+
+    return rows;
+  }
+
+  // VERSION 210: Kategori dropdown handled directly in ToDo view (independent of FieldTypes)
+  const TODO_CATEGORIES = ["Allmänt","Info","Shopify-B2C","Shopify-B2B","Logistik","Privat"];
+
+  function renderTodoCategoryCell(row, tabKey, onPick) {
+    const value = String((row && row.fields && row.fields["Kategori"]) || "");
+    const label = value || "Välj kategori";
+    const wrap = el("div", { style:"position:relative;display:inline-block;overflow:hidden;width:17ch;min-width:17ch;max-width:17ch;" }, []);
+
+    const disp = el("div", {
+      class:"input",
+      style:"display:flex;align-items:center;justify-content:space-between;gap:8px;cursor:pointer;user-select:none;width:100%;padding-right:26px;"
+    }, [ label ]);
+
+    const caret = el("span", { style:"position:absolute;right:8px;top:50%;transform:translateY(-50%);pointer-events:none;opacity:0.7;" }, ["▾"]);
+
+    const sel = el("select", {
+      style:"position:absolute;inset:0;opacity:0;cursor:pointer;width:100%;height:100%;pointer-events:auto;",
+      title:"Kategori"
+    }, [
+      el("option", { value:"" }, [""]),
+      ...TODO_CATEGORIES.map(v => el("option", { value:v }, [v]))
+    ]);
+    sel.value = value;
+
+    sel.addEventListener("change", function(){
+      const v = sel.value;
+      if (typeof onPick === "function") onPick(v);
+    });
+
+    // clicking on display should open select dropdown (native)
+    disp.addEventListener("click", function(){
+      try { sel.focus(); sel.click(); } catch(e) {}
+    });
+
+    wrap.appendChild(disp);
+    wrap.appendChild(caret);
+    wrap.appendChild(sel);
+    return wrap;
+  }
+
+  // VERSION 214: New ToDo uses a modal (avoids filter/category confusion)
+  let _todoNewModalOpen = false;
+
+  function openNewTodoModal(tabKey, state) {
+    if (_todoNewModalOpen) return;
+    _todoNewModalOpen = true;
+
+    const st0 = state || App.getState();
+    const acting = (App.getActingUser ? App.getActingUser(st0) : (st0 && st0.session && st0.session.actingUser) || (st0 && st0.session && st0.session.user) || {}) || {};
+    const ownerKey = String(acting.email || acting.id || "");
+    const initDefault = String((acting.initials || "").trim() || "--");
+
+    const model = { kategori:"", beskrivning:"", klart:"", initials:initDefault };
+
+    const overlay = el("div", { class:"usp-modal-overlay" }, []);
+    const backdrop = el("div", { class:"usp-modal-backdrop" }, []);
+    const modal = el("div", { class:"usp-modal" }, []);
+
+    function close() {
+      _todoNewModalOpen = false;
+      try { overlay.remove(); } catch(e) {}
+    }
+
+    function save() {
+      try {
+        const k = tabKey || (App.Tabs && App.Tabs.TODO ? App.Tabs.TODO : "todo");
+        const base = App.blankRow ? App.blankRow(k) : { id:null, fields:{}, meta:{} };
+        base.fields = base.fields || {};
+        base.meta = Object.assign({}, base.meta || {}, { owner: ownerKey, green: false });
+
+        base.fields["Kategori"] = String(model.kategori || "");
+        base.fields["Beskrivning"] = String(model.beskrivning || "");
+        base.fields["Klart"] = String(model.klart || "");
+
+        const ik = initialsKeyFor("Beskrivning");
+        base.fields[ik] = String(model.initials || "--").trim() || "--";
+
+        App.upsertRow(k, base);
+
+        // After save: set filter to saved category and show only that
+        const st1 = App.getState();
+        const chosen = String(model.kategori || "");
+        if (chosen && st1 && st1.session) {
+          const st2 = (App.cloneState ? App.cloneState(st1) : JSON.parse(JSON.stringify(st1)));
+          st2.session = st2.session || {};
+          st2.session.todoFilterCat = chosen;
+            st2.session.todoRecent = false;
+          App.commitState(st2);
+        }
+
+        close();
+      } catch (e) {
+        console.error("Save ToDo failed", e);
+      }
+    }
+
+    const head = el("div", { class:"usp-modal-head" }, [
+      el("div", { class:"usp-modal-title" }, ["Ny ToDo"]),
+      el("div", { class:"usp-modal-subtitle" }, ["Fyll i Kategori, Beskrivning och Klart, och spara."])
+    ]);
+
+    // Kategori (clickable value opens dropdown)
+    const catLabel = el("div", { class:"usp-modal-label" }, ["Kategori"]);
+    const catCell = renderTodoCategoryCell({ fields:{ "Kategori": model.kategori } }, tabKey, (v) => {
+      model.kategori = v;
+      const vEl = catCell.querySelector(".input");
+      if (vEl) vEl.textContent = v || "Välj kategori";
+    });
+    const vEl0 = catCell.querySelector(".input");
+    if (vEl0) vEl0.textContent = "Välj kategori";
+    const catField = el("div", { class:"usp-modal-field" }, [catLabel, catCell]);
+
+    // Beskrivning + initials
+    const descLabel = el("div", { class:"usp-modal-label" }, ["Beskrivning"]);
+    const descInput = el("input", { class:"usp-modal-input", type:"text", value:model.beskrivning }, []);
+    descInput.addEventListener("input", () => { model.beskrivning = descInput.value; });
+
+    const iniBtn = el("button", { class:"act-initials", type:"button", title:"Initialer" }, [model.initials]);
+    iniBtn.addEventListener("click", (e) => {
+      e.preventDefault(); e.stopPropagation();
+      const pick = promptPickInitials(model.initials);
+      if (pick === null) return;
+      model.initials = pick;
+      iniBtn.textContent = pick;
+    });
+
+    const descWrap = el("div", { class:"usp-modal-descwrap" }, [descInput, iniBtn]);
+    const descField = el("div", { class:"usp-modal-field" }, [descLabel, descWrap]);
+
+    // Klart (date)
+    const dateLabel = el("div", { class:"usp-modal-label" }, ["Klart"]);
+    const dateInput = el("input", { class:"usp-modal-input usp-modal-date", type:"date", value:model.klart }, []);
+    dateInput.addEventListener("change", () => { model.klart = dateInput.value; });
+    const dateField = el("div", { class:"usp-modal-field" }, [dateLabel, dateInput]);
+
+    const fields = el("div", { class:"usp-modal-fields" }, [catField, descField, dateField]);
+
+    const btnCancel = el("button", { class: btnClass("secondary"), type:"button" }, ["Cancel"]);
+    btnCancel.addEventListener("click", (e) => { e.preventDefault(); close(); });
+
+    const btnSave = el("button", { class: btnClass("primary"), type:"button" }, ["Save"]);
+    btnSave.addEventListener("click", (e) => { e.preventDefault(); save(); });
+
+    const btns = el("div", { class:"usp-modal-actions" }, [btnCancel, btnSave]);
+
+    modal.appendChild(head);
+    modal.appendChild(fields);
+    modal.appendChild(btns);
+
+    overlay.appendChild(backdrop);
+    overlay.appendChild(modal);
+
+    backdrop.addEventListener("click", () => close());
+    document.addEventListener("keydown", function esc(e){
+      if (!_todoNewModalOpen) { document.removeEventListener("keydown", esc); return; }
+      if (e.key === "Escape") { e.preventDefault(); close(); document.removeEventListener("keydown", esc); }
+    });
+
+    document.body.appendChild(overlay);
+    try { descInput.focus(); } catch(e) {}
+  }
+
+
+
+
+  function rerender() {
+    setHtml(tbody, "");
+    const freshRows = filterRows(App.listRows(tabKey, App.getState()) || []);
+    freshRows.forEach(r => {
+      const tr = el("tr", {}, []);
+      if (r.meta && r.meta.green) tr.classList.add("usp-row-green");
+
+      fieldNames.forEach(n => {
+        const td = el("td", {}, []);
+        if (n === "Start" || n === "Slut") td.style.textAlign = "center";
+        // Right click on Kategori toggles green row
+        if (n === "Kategori") {
+          const catEl = renderProjectCategoryCell(r, (val) => {
+            const st3 = App.getState();
+            const cur3 = getRowSafe(tabKey, r.id, st3) || r;
+            const next3 = Object.assign({}, cur3, { updatedAt: new Date().toISOString(), fields: Object.assign({}, cur3.fields||{}) });
+            next3.fields["Kategori"] = val;
+            App.upsertRow(tabKey, next3);
+          });
+          td.appendChild(catEl);
+          tr.appendChild(td);
+          return;
+        }
+
+        const editor = (App.FieldTypes && typeof App.FieldTypes.renderEditor === "function")
+          ? App.FieldTypes.renderEditor({
+              baseType: tkey,
+              mods: Object.assign({}, field.mods||{}, overdue ? { overdue:true } : {}),
+              overdue,
+              value: (r.fields && r.fields[n]) ?? "",
+              disabled: false,
+              onChange: (val) => {
+                const st3 = App.getState();
+                const cur3 = getRowSafe(tabKey, r.id, st3) || r;
+                const next3 = Object.assign({}, cur3, { updatedAt: new Date().toISOString(), fields: Object.assign({}, cur3.fields||{}) });
+                const v = (App.FieldTypes.normalizeValue) ? App.FieldTypes.normalizeValue(tkey, val) : val;
+                next3.fields[n] = v;
+                App.upsertRow(tabKey, next3);
+              },
+              initialsValue: (r.fields && r.fields[initialsKeyFor(n)]) ?? "--",
+              onInitialsClick: (field.mods && field.mods.initials) ? () => {
+                const curIni = (r.fields && r.fields[initialsKeyFor(n)]) ?? "--";
+                const pick = promptPickInitials(curIni);
+                if (pick === null) return;
+                const st4 = App.getState();
+                const cur4 = getRowSafe(tabKey, r.id, st4) || r;
+                const next4 = Object.assign({}, cur4, { updatedAt: new Date().toISOString(), fields: Object.assign({}, cur4.fields||{}) });
+                next4.fields[initialsKeyFor(n)] = String(pick || "--");
+                App.upsertRow(tabKey, next4);
+              } : undefined,
+              notesHas: (function () {
+                try { const log = readNotesLog((r.fields || {}), n); return Array.isArray(log) && log.length > 0; } catch (e) { return false; }
+              })(),
+              onNotesClick: (field.mods && field.mods.notes) ? () => {
+                try {
+                  const st5 = App.getState();
+                  const cur5 = getRowSafe(tabKey, r.id, st5) || r;
+                  const next5 = Object.assign({}, cur5, { updatedAt: new Date().toISOString(), fields: Object.assign({}, cur5.fields||{}) });
+                  const log = readNotesLog(next5.fields, n);
+                  const add = promptAddNote(log);
+                  if (add === null) return;
+                  if (add) log.push({ ts: new Date().toISOString(), by: currentInitials(), text: add });
+                  writeNotesLog(next5.fields, n, log);
+                  App.upsertRow(tabKey, next5);
+                } catch (e) { console.warn(e); }
+              } : undefined,
+            })
+          : el("div", {}, [String((r.fields && r.fields[n]) ?? "")]);
+
+        td.appendChild(editor);
+        tr.appendChild(td);
+      });
+
+      // Delete button
+      const tdDel = el("td", { style:"white-space:nowrap;" }, []);
+      tdDel.appendChild(el("button", { class: btnClass("secondary"), type:"button", onclick: () => {
+        const ok = window.confirm("Ta bort raden permanent?");
+        if (!ok) return;
+        // delete by filtering list and committing
+        const stDel = App.getState();
+        const next = (function(){ try { return JSON.parse(JSON.stringify(stDel)); } catch(e) { return Object.assign({}, stDel); } })();
+        next.data = next.data || {};
+        next.data[tabKey] = (App.listRows(tabKey, stDel) || []).filter(x => !(x && x.id === r.id));
+        App.commitState(next);
+      }}, ["Ta bort"]));
+      tr.appendChild(tdDel);
+
+      tbody.appendChild(tr);
+    });
+  }
+
+  rerender();
+}
+
+  // ===========================
+  // Projekt view (fixed table + modal add)
+  // VERSION 226
+  // ===========================
+  const PROJECT_CATEGORIES_UI = ["kundprojekt","volymprojekt","samarbetsprojekt"];
+
+  function projectArchiveKey() { return "project_archive"; }
+
+  function renderProjectCategoryCell(row, tabKey, onPick) {
+    const value = String((row && row.fields && row.fields["Kategori"]) || "");
+    const label = value || "Välj";
+    const wrap = el("div", { style:"position:relative;display:inline-block;overflow:hidden;width:17ch;min-width:17ch;max-width:17ch;" }, []);
+
+    const disp = el("div", {
+      class:"input",
+      style:"display:flex;align-items:center;justify-content:space-between;gap:8px;cursor:pointer;user-select:none;width:100%;padding-right:26px;"
+    }, [ label ]);
+
+    const caret = el("span", { style:"position:absolute;right:8px;top:50%;transform:translateY(-50%);pointer-events:none;opacity:0.7;" }, ["▾"]);
+
+    const sel = el("select", {
+      style:"position:absolute;inset:0;opacity:0;cursor:pointer;width:100%;height:100%;pointer-events:auto;",
+      title:"Kategori"
+    }, [
+      el("option", { value:"" }, ["Välj"]),
+      ...PROJECT_CATEGORIES_UI.map(v => el("option", { value:v }, [v]))
+    ]);
+    sel.value = value;
+
+    sel.addEventListener("change", function(){
+      const v = sel.value;
+      if (typeof onPick === "function") onPick(v);
+      // update visible label
+      disp.textContent = v || "Välj";
+    });
+
+    disp.addEventListener("click", function(){
+      try { sel.focus(); sel.click(); } catch(e) {}
+    });
+
+    wrap.appendChild(disp);
+    wrap.appendChild(caret);
+    wrap.appendChild(sel);
+    return wrap;
+  }
+
+  let _projectNewModalOpen = false;
+  function openNewProjectModal(tabKey, state) {
+    if (_projectNewModalOpen) return;
+    _projectNewModalOpen = true;
+
+    const st0 = state || App.getState();
+    const acting = (App.getActingUser ? App.getActingUser(st0) : (st0 && st0.session && st0.session.actingUser) || (st0 && st0.session && st0.session.user) || {}) || {};
+    const ownerKey = String(acting.email || acting.id || "");
+    const initDefault = String((acting.initials || "").trim() || "--");
+
+    const model = {
+      projektnamn:"",
+      projektnamnInit:initDefault,
+      projektnamnNotes:[],
+      kategori:"",
+      start:"",
+      aktuell:"",
+      aktuellInit:initDefault,
+      aktuellNotes:[],
+      nasta:"",
+      nastaInit:initDefault,
+      nastaNotes:[],
+      kommande:"",
+      kommandeInit:initDefault,
+      kommandeNotes:[],
+      slut:""
+    };
+
+    const overlay = el("div", { class:"usp-modal-overlay" }, []);
+    const backdrop = el("div", { class:"usp-modal-backdrop" }, []);
+    const modal = el("div", { class:"usp-modal" }, []);
+
+    function close() {
+      _projectNewModalOpen = false;
+      try { overlay.remove(); } catch(e) {}
+    }
+
+    function editNotes(fieldLabel, notesArrRefSetter, currentArr) {
+      const t = promptAddNote(currentArr || []);
+      if (t === null) return;
+      if (!t) return;
+      const ts = new Date().toISOString();
+      const entry = { ts, by: (acting && acting.initials) ? acting.initials : "", text: t };
+      const next = (currentArr || []).concat([entry]);
+      notesArrRefSetter(next);
+    }
+
+    function save() {
+      try {
+        const k = tabKey || (App.Tabs && App.Tabs.PROJECT ? App.Tabs.PROJECT : "project");
+        const base = App.blankRow ? App.blankRow(k) : { id:null, fields:{}, meta:{} };
+        base.fields = base.fields || {};
+        base.meta = Object.assign({}, base.meta || {}, { owner: ownerKey });
+
+        base.fields["Projektnamn"] = String(model.projektnamn || "");
+        base.fields["Kategori"] = String(model.kategori || "");
+        base.fields["Start"] = String(model.start || "");
+        base.fields["Aktuell"] = String(model.aktuell || "");
+        base.fields["Nästa"] = String(model.nasta || "");
+        base.fields["Kommande"] = String(model.kommande || "");
+        base.fields["Slut"] = String(model.slut || "");
+
+        base.fields[initialsKeyFor("Projektnamn")] = String(model.projektnamnInit || "--");
+        base.fields[initialsKeyFor("Aktuell")] = String(model.aktuellInit || "--");
+        base.fields[initialsKeyFor("Nästa")] = String(model.nastaInit || "--");
+        base.fields[initialsKeyFor("Kommande")] = String(model.kommandeInit || "--");
+
+        base.fields[notesKeyFor("Projektnamn")] = model.projektnamnNotes || [];
+        base.fields[notesKeyFor("Aktuell")] = model.aktuellNotes || [];
+        base.fields[notesKeyFor("Nästa")] = model.nastaNotes || [];
+        base.fields[notesKeyFor("Kommande")] = model.kommandeNotes || [];
+
+        App.upsertRow(k, base);
+        close();
+      } catch (e) {
+        console.error("Save Project failed", e);
+      }
+    }
+
+    const head = el("div", { class:"usp-modal-head" }, [
+      el("div", { class:"usp-modal-title" }, ["Nytt projekt"]),
+      el("div", { class:"usp-modal-subtitle" }, ["Fyll i uppgifter och spara."])
+    ]);
+
+    function fieldRow(label, control) {
+      return el("div", { class:"usp-modal-field" }, [
+        el("div", { class:"usp-modal-label" }, [label]),
+        control
+      ]);
+    }
+
+    // Projektnamn + initials (click initials to notes)
+    const pnInput = el("input", { class:"usp-modal-input", type:"text", value:model.projektnamn }, []);
+    pnInput.addEventListener("input", () => { model.projektnamn = pnInput.value; });
+
+    const pnIni = el("button", { class:"act-initials", type:"button", title:"Initialer / Notes" }, [model.projektnamnInit]);
+    function refreshPnIni() {
+      pnIni.textContent = model.projektnamnInit || "--";
+      pnIni.style.color = (model.projektnamnNotes && model.projektnamnNotes.length) ? "#0b3d91" : "";
+    }
+    pnIni.addEventListener("click", (e) => {
+      e.preventDefault(); e.stopPropagation();
+      // click initials opens notes; shift-click changes initials
+      if (e.shiftKey) {
+        const pick = promptPickInitials(model.projektnamnInit);
+        if (pick === null) return;
+        model.projektnamnInit = pick;
+        refreshPnIni();
+        return;
+      }
+      editNotes("Projektnamn", (arr)=>{ model.projektnamnNotes = arr; refreshPnIni(); }, model.projektnamnNotes);
+    });
+    refreshPnIni();
+
+    const pnWrap = el("div", { class:"usp-modal-descwrap" }, [pnInput, pnIni]);
+    const pnField = fieldRow("Projektnamn", pnWrap);
+
+    // Kategori dropdown
+    const catCell = renderProjectCategoryCell({ fields:{ "Kategori": model.kategori } }, tabKey, (v)=>{ model.kategori=v; });
+    const catField = fieldRow("Kategori", catCell);
+
+    // Start date
+    const startInput = el("input", { class:"usp-modal-input usp-modal-date", type:"date", value:model.start }, []);
+    startInput.addEventListener("change", ()=>{ model.start = startInput.value; });
+    const startField = fieldRow("Start", startInput);
+
+    // Aktuell + initials + corner marker (click initials opens notes; shift-click changes initials)
+    const aInput = el("input", { class:"usp-modal-input", type:"text", value:model.aktuell }, []);
+    aInput.addEventListener("input", ()=>{ model.aktuell = aInput.value; });
+    const aIni = el("button", { class:"act-initials has-corner", type:"button", title:"Initialer / Notes" }, [model.aktuellInit]);
+    function refreshAIni() {
+      aIni.textContent = model.aktuellInit || "--";
+      aIni.style.color = (model.aktuellNotes && model.aktuellNotes.length) ? "#0b3d91" : "";
+    }
+    aIni.addEventListener("click", (e)=>{
+      e.preventDefault(); e.stopPropagation();
+      if (e.shiftKey) {
+        const pick = promptPickInitials(model.aktuellInit);
+        if (pick === null) return;
+        model.aktuellInit = pick;
+        refreshAIni();
+        return;
+      }
+      editNotes("Aktuell", (arr)=>{ model.aktuellNotes = arr; refreshAIni(); }, model.aktuellNotes);
+    });
+    refreshAIni();
+    const aWrap = el("div", { class:"usp-modal-descwrap" }, [aInput, aIni]);
+    const aField = fieldRow("Aktuell", aWrap);
+
+    // Nästa
+    const nInput = el("input", { class:"usp-modal-input", type:"text", value:model.nasta }, []);
+    nInput.addEventListener("input", ()=>{ model.nasta = nInput.value; });
+    const nIni = el("button", { class:"act-initials", type:"button", title:"Initialer / Notes" }, [model.nastaInit]);
+    function refreshNIni() {
+      nIni.textContent = model.nastaInit || "--";
+      nIni.style.color = (model.nastaNotes && model.nastaNotes.length) ? "#0b3d91" : "";
+    }
+    nIni.addEventListener("click", (e)=>{
+      e.preventDefault(); e.stopPropagation();
+      if (e.shiftKey) {
+        const pick = promptPickInitials(model.nastaInit);
+        if (pick === null) return;
+        model.nastaInit = pick;
+        refreshNIni();
+        return;
+      }
+      editNotes("Nästa", (arr)=>{ model.nastaNotes = arr; refreshNIni(); }, model.nastaNotes);
+    });
+    refreshNIni();
+    const nWrap = el("div", { class:"usp-modal-descwrap" }, [nInput, nIni]);
+    const nField = fieldRow("Nästa", nWrap);
+
+    // Kommande
+    const kInput = el("input", { class:"usp-modal-input", type:"text", value:model.kommande }, []);
+    kInput.addEventListener("input", ()=>{ model.kommande = kInput.value; });
+    const kIni = el("button", { class:"act-initials", type:"button", title:"Initialer / Notes" }, [model.kommandeInit]);
+    function refreshKIni() {
+      kIni.textContent = model.kommandeInit || "--";
+      kIni.style.color = (model.kommandeNotes && model.kommandeNotes.length) ? "#0b3d91" : "";
+    }
+    kIni.addEventListener("click", (e)=>{
+      e.preventDefault(); e.stopPropagation();
+      if (e.shiftKey) {
+        const pick = promptPickInitials(model.kommandeInit);
+        if (pick === null) return;
+        model.kommandeInit = pick;
+        refreshKIni();
+        return;
+      }
+      editNotes("Kommande", (arr)=>{ model.kommandeNotes = arr; refreshKIni(); }, model.kommandeNotes);
+    });
+    refreshKIni();
+    const kWrap = el("div", { class:"usp-modal-descwrap" }, [kInput, kIni]);
+    const kField = fieldRow("Kommande", kWrap);
+
+    // Slut date
+    const slutInput = el("input", { class:"usp-modal-input usp-modal-date", type:"date", value:model.slut }, []);
+    slutInput.addEventListener("change", ()=>{ model.slut = slutInput.value; });
+    const slutField = fieldRow("Slut", slutInput);
+
+    const fields = el("div", { class:"usp-modal-fields" }, [pnField, catField, startField, aField, nField, kField, slutField]);
+
+    const btnCancel = el("button", { class: btnClass("secondary"), type:"button" }, ["Cancel"]);
+    btnCancel.addEventListener("click", (e)=>{ e.preventDefault(); close(); });
+
+    const btnSave = el("button", { class: btnClass("primary"), type:"button" }, ["Save"]);
+    btnSave.addEventListener("click", (e)=>{ e.preventDefault(); save(); });
+
+    const btns = el("div", { class:"usp-modal-actions" }, [btnCancel, btnSave]);
+
+    modal.appendChild(head);
+    modal.appendChild(fields);
+    modal.appendChild(btns);
+
+    overlay.appendChild(backdrop);
+    overlay.appendChild(modal);
+
+    backdrop.addEventListener("click", ()=>close());
+    document.addEventListener("keydown", function esc(e){
+      if (!_projectNewModalOpen) { document.removeEventListener("keydown", esc); return; }
+      if (e.key === "Escape") { e.preventDefault(); close(); document.removeEventListener("keydown", esc); }
+    });
+
+    document.body.appendChild(overlay);
+    try { pnInput.focus(); } catch(e) {}
+  }
+
+  function projectView(state, tabKey, title) {
+
+    // VERSION 230: Kategori i tabellen visas som klickbar text (ej synlig dropdown)
+    const PROJECT_CATEGORIES = ["kundprojekt","volymprojekt","samarbetsprojekt"];
+
+    function renderProjectCategoryCell(row, onPick) {
+      const value = String((row && row.fields && row.fields["Kategori"]) || "");
+      const label = value || "Välj";
+      const wrap = el("div", { style:"position:relative;display:inline-block;overflow:hidden;width:17ch;min-width:17ch;max-width:17ch;" }, []);
+
+      const disp = el("div", {
+        class:"input",
+        style:"display:flex;align-items:center;justify-content:space-between;gap:8px;cursor:pointer;user-select:none;width:100%;padding-right:26px;"
+      }, [ label ]);
+
+      const caret = el("span", { style:"position:absolute;right:8px;top:50%;transform:translateY(-50%);pointer-events:none;opacity:0.7;" }, ["▾"]);
+
+      const sel = el("select", {
+        style:"position:absolute;inset:0;opacity:0;cursor:pointer;width:100%;height:100%;pointer-events:auto;",
+        title:"Kategori"
+      }, [
+        el("option", { value:"" }, [""]),
+        ...PROJECT_CATEGORIES.map(v => el("option", { value:v }, [v]))
+      ]);
+      sel.value = value;
+
+      sel.addEventListener("change", function(){
+        const v = sel.value;
+        if (typeof onPick === "function") onPick(v);
+        // update display text
+        disp.textContent = v || "Välj";
+        disp.appendChild(caret);
+      });
+
+      disp.addEventListener("click", function(){
+        try { sel.focus(); sel.click(); } catch(e) {}
+      });
+
+      wrap.appendChild(disp);
+      wrap.appendChild(caret);
+      wrap.appendChild(sel);
+      return wrap;
+    }
+
+
+    ensureFixedProjectSchema(tabKey, state);
+
+    const view = byId("usp-view");
+    if (!view) return;
+    setHtml(view, "");
+
+    const heroButtons = [];
+    heroButtons.push(el("button", { class: btnClass("primary"), type:"button", onclick: () => openNewProjectModal(tabKey, App.getState()) }, ["Nytt projekt"]));
+
+    // Optional: Arkiv viewer
+    heroButtons.push(el("button", { class: btnClass("secondary"), type:"button", onclick: () => {
+      const st = App.getState();
+      const entries = (st && st.data && st.data[projectArchiveKey()]) ? st.data[projectArchiveKey()] : [];
+      const txt = entries && entries.length ? entries.map(e => (e.ts||"") + " " + (e.projektnamn||"") + " — " + (e.text||"")).join("\n") : "(tomt)";
+      alert("Projekt-arkiv\n\n" + txt);
+    }}, ["Arkiv"]));
+
+    view.appendChild(hero(title || "Projekt", "Projektlista", heroButtons));
+
+    const schema = App.getSchema(tabKey, state) || fixedProjectSchema();
+    const rows = App.listRows(tabKey, state) || [];
+    const fieldNames = schema.fields.map(f => f.name);
+
+    const table = el("table", { class:"grid" }, []);
+    const thead = el("thead", {}, []);
+    const htr = el("tr", {}, [
+      ...fieldNames.map(n => el("th", { style: (n==="Kategori" ? "width:17ch;" : (n==="Start"||n==="Slut" ? "width:15ch;" : null)) }, [n])),
+      el("th", { style:"text-align:right;white-space:nowrap;" }, [""])
+    ]);
+    thead.appendChild(htr);
+    table.appendChild(thead);
+
+    const tbody = el("tbody", {}, []);
+
+    function onNotesClick(rowId, fieldName) {
+      const st = App.getState();
+      const row = getRowSafe(tabKey, rowId, st);
+      if (!row) return;
+      const fields = Object.assign({}, row.fields || {});
+      const existing = readNotesLog(fields, fieldName);
+      const t = promptAddNote(existing);
+      if (t === null) return;
+      const nextLog = t ? (existing.concat([{ ts: new Date().toISOString(), by: (App.getActingUser ? (App.getActingUser(st).initials||"") : ""), text: t }])) : existing;
+      writeNotesLog(fields, fieldName, nextLog);
+      const nextRow = Object.assign({}, row, { fields, updatedAt: new Date().toISOString() });
+      App.upsertRow(tabKey, nextRow);
+    }
+
+    function notesHas(row, fieldName) {
+      const log = readNotesLog(row.fields || {}, fieldName);
+      return log && log.length > 0;
+    }
+
+    function renderRow(r) {
+      const tr = el("tr", {}, []);
+      fieldNames.forEach((n) => {
+        const td = el("td", {}, []);
+        if (n === "Start" || n === "Slut") td.style.textAlign = "center";
+
+        if (n === "Kategori") {
+          td.appendChild(renderProjectCategoryCell(r, tabKey, (val) => {
+            const st = App.getState();
+            const cur = getRowSafe(tabKey, r.id, st) || r;
+            const next = Object.assign({}, cur, { updatedAt: new Date().toISOString(), fields: Object.assign({}, cur.fields||{}) });
+            next.fields["Kategori"] = val;
+            App.upsertRow(tabKey, next);
+          }));
+          tr.appendChild(td);
+          return;
+        }
+
+        const f = schema.fields.find(x => x.name === n) || { type:"text", mods:{} };
+        const value = (r.fields && r.fields[n] != null) ? r.fields[n] : "";
+        const iniKey = initialsKeyFor(n);
+        const iniVal = (r.fields && r.fields[iniKey] != null) ? r.fields[iniKey] : "--";
+
+        const editor = App.FieldTypes.renderEditor({
+          type: f.type,
+          value: value,
+          mods: Object.assign({}, f.mods || {}),
+          // initials addon (default --)
+          initialsValue: iniVal,
+          onInitialsClick: (f.mods && f.mods.initials) ? (() => {
+            const curIni = (r.fields && r.fields[iniKey] != null) ? r.fields[iniKey] : "--";
+            const pick = promptPickInitials(curIni);
+            if (pick === null) return;
+            const st = App.getState();
+            const cur = getRowSafe(tabKey, r.id, st) || r;
+            const fields = Object.assign({}, cur.fields || {});
+            fields[iniKey] = String(pick || "--");
+            const nextRow = Object.assign({}, cur, { fields, updatedAt: new Date().toISOString() });
+            App.upsertRow(tabKey, nextRow);
+          }) : null,
+          // notes addon
+          notesHas: (f.mods && f.mods.notes) ? notesHas(r, n) : false,
+          onNotesClick: (f.mods && f.mods.notes) ? (() => onNotesClick(r.id, n)) : null,
+          onChange: (nextVal) => {
+            const st = App.getState();
+            const cur = getRowSafe(tabKey, r.id, st) || r;
+            const fields = Object.assign({}, cur.fields || {});
+            fields[n] = nextVal;
+            const nextRow = Object.assign({}, cur, { fields, updatedAt: new Date().toISOString() });
+            App.upsertRow(tabKey, nextRow);
+          }
+        });
+
+        // corner marker for Aktuell
+        if (n === "Aktuell") {
+          td.className = (td.className ? td.className + " " : "") + "has-corner-marker";
+        }
+
+        td.appendChild(editor);
+        tr.appendChild(td);
+      });
+
+      const actionsTd = el("td", { style:"text-align:right;white-space:nowrap;" }, []);
+
+      const btnDone = el("button", { class: btnClass("secondary"), type:"button", onclick: () => {
+        const st = App.getState();
+        const row = getRowSafe(tabKey, r.id, st);
+        if (!row) return;
+        const text = String((row.fields && row.fields["Aktuell"]) || "").trim();
+        if (!text) return;
+
+        const entry = {
+          ts: new Date().toISOString(),
+          projectId: row.id,
+          projektnamn: String((row.fields && row.fields["Projektnamn"]) || ""),
+          kategori: String((row.fields && row.fields["Kategori"]) || ""),
+          text: text,
+          by: String((App.getActingUser ? (App.getActingUser(st).initials||"") : ""))
+        };
+
+        const st2 = (App.cloneState ? App.cloneState(st) : JSON.parse(JSON.stringify(st)));
+        st2.data = st2.data || {};
+        const ak = projectArchiveKey();
+        st2.data[ak] = Array.isArray(st2.data[ak]) ? st2.data[ak] : [];
+        st2.data[ak].push(entry);
+        App.commitState(st2);
+
+        // Clear Aktuell and its notes (keep initials)
+        const fields = Object.assign({}, row.fields || {});
+        fields["Aktuell"] = "";
+        fields[notesKeyFor("Aktuell")] = [];
+        const nextRow = Object.assign({}, row, { fields, updatedAt: new Date().toISOString() });
+        App.upsertRow(tabKey, nextRow);
+      }}, ["Aktuellt klar"]);
+
+      const btnDel = el("button", { class: btnClass("danger"), type:"button", onclick: () => {
+        if (!confirm("Ta bort raden?")) return;
+        App.archiveRow(tabKey, r.id);
+      }}, ["Ta bort"]);
+
+      actionsTd.appendChild(btnDone);
+      actionsTd.appendChild(el("span", { style:"display:inline-block;width:8px;" }, [""]));
+      actionsTd.appendChild(btnDel);
+
+      tr.appendChild(actionsTd);
+      return tr;
+    }
+
+    rows.filter(r => !r.archived).forEach(r => tbody.appendChild(renderRow(r)));
+    table.appendChild(tbody);
+    view.appendChild(table);
+  }
+
+
+
+
 
 
   // ---------------------------
@@ -1019,8 +2247,51 @@ function userDataView(state, tabKey, title) {
 
 
   UI.render = function render(state) {
+
+    
+
+    registerFixedTables();
+    const activeTab = state && state.session ? state.session.tab : null;
+    if (activeTab && FIXED_TABLES[activeTab]) {
+      const type = FIXED_TABLES[activeTab].type;
+      if (type === "todo" && typeof todoView === "function") {
+        const k = (App.Tabs && App.Tabs.TODO) ? App.Tabs.TODO : "todo";
+        return todoView(state, k, "ToDo");
+      }
+      if (type === "project" && typeof projectView === "function") {
+        const k = (App.Tabs && App.Tabs.PROJECT) ? App.Tabs.PROJECT : "project";
+        return projectView(state, k, "Projekt");
+      }
+      if (type === "routines" && typeof userDataView === "function") {
+        return userDataView(state);
+      }
+    }
+
+
+    
+    // VERSION 107: hard-sanitize duplicate roots/views created by older builds
+    try {
+      const root = document.getElementById("app");
+      if (root) {
+        const wraps = root.querySelectorAll(".table-wrap");
+        if (wraps && wraps.length > 1) {
+          for (let i = 1; i < wraps.length; i++) wraps[i].remove();
+        }
+        const views = document.querySelectorAll("#usp-view");
+        if (views && views.length > 1) {
+          for (let i = 1; i < views.length; i++) views[i].remove();
+        }
+      }
+    } catch(e) {}
+    const tab0 = App.getTab(state);
+    if (tab0 === App.Tabs.TODO) {
+      try { const root0 = document.getElementById("app"); if (root0) root0.innerHTML = ""; } catch(e) {}
+    }
+
     UI.mountBase();
     renderTopbar(state);
+    _renderTick++;
+    _routinesSchemaEnsured = false;
 
     const tab = App.getTab(state);
     const role = App.role(state);
@@ -1031,16 +2302,19 @@ function userDataView(state, tabKey, title) {
     if (role === "admin") {
       if (tab === App.Tabs.DEV) return adminSchemaView(state, App.Tabs.DEV, "Utveckling");
       if (tab === App.Tabs.PRODUCT) return adminSchemaView(state, App.Tabs.PRODUCT, "Sälj");
-      if (tab === App.Tabs.TODO) return adminSchemaView(state, App.Tabs.TODO, "ToDo");
-      if (tab === App.Tabs.ROUTINES) return adminSchemaView(state, App.Tabs.ROUTINES, "Rutiner");
+      if (tab === App.Tabs.TODO) return todoView(state, App.Tabs.TODO, "ToDo");
+    if (tab === App.Tabs.PROJECT) return projectView(state, App.Tabs.PROJECT, "Projekt");
+      if (tab === App.Tabs.PROJECT) return projectView(state, App.Tabs.PROJECT, "Projekt");
+      if (tab === App.Tabs.ROUTINES) return userDataView(state, App.Tabs.ROUTINES, "Rutiner", { routinesEditable: true });
     }
 
     if (tab === App.Tabs.DEV) return userDataView(state, App.Tabs.DEV, "Utveckling");
     if (tab === App.Tabs.PRODUCT) return userDataView(state, App.Tabs.PRODUCT, "Sälj");
-    if (tab === App.Tabs.TODO) return userDataView(state, App.Tabs.TODO, "ToDo");
+    if (tab === App.Tabs.TODO) return todoView(state, App.Tabs.TODO, "ToDo");
+    if (tab === App.Tabs.PROJECT) return projectView(state, App.Tabs.PROJECT, "Projekt");
     if (tab === App.Tabs.ROUTINES) return userDataView(state, App.Tabs.ROUTINES, "Rutiner");
 
-    return userDataView(state, App.Tabs.TODO, "ToDo");
+    return todoView(state, App.Tabs.TODO, "ToDo");
   };
 
 })();

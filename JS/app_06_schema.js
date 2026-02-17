@@ -121,3 +121,23 @@
     return st;
   };
 })();
+
+
+// === VERSION 93 ===
+// Fixed schema override for Rutiner (Admin-controlled, fixed columns)
+
+(function(){
+  const FIXED_RUTIN_SCHEMA = [
+    { key: "Rutin", type: "text", notes: true },
+    { key: "Steg1", type: "text", notes: true },
+    { key: "Steg2", type: "text", notes: true },
+    { key: "Steg3", type: "text", notes: true },
+    { key: "Steg4", type: "text", notes: true },
+    { key: "Steg5", type: "text", notes: true }
+  ];
+
+  if (window.APP_SCHEMA) {
+    window.APP_SCHEMA["Rutiner"] = FIXED_RUTIN_SCHEMA;
+  }
+})();
+
