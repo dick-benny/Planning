@@ -130,6 +130,7 @@ app.get("/api/state", (req, res) => {
   try {
     if (useSQLite && db) {
       const row = db.prepare("SELECT * FROM app_state WHERE key = ?").get("main");
+      console.log("📤 GET /api/state (SQLite):", row);
       if (!row) {
         return res.json({ key: "main", state: null, updated_at: null });
       }
@@ -141,6 +142,7 @@ app.get("/api/state", (req, res) => {
     } else {
       // JSON fallback
       const data = readStateFromJSON();
+      console.log("📤 GET /api/state (JSON):", data);
       res.json(data);
     }
   } catch (err) {
@@ -155,6 +157,8 @@ app.post("/api/state", (req, res) => {
     const state = req.body?.state;
     const updated_at = new Date().toISOString();
     
+    console.log("📥 POST /api/state - State size:", JSON.stringify(state).length, "bytes");
+    
     if (useSQLite && db) {
       const stateJson = JSON.stringify(state);
       db.prepare(`
@@ -164,10 +168,12 @@ app.post("/api/state", (req, res) => {
           state = excluded.state,
           updated_at = excluded.updated_at
       `).run("main", stateJson, updated_at);
+      console.log("💾 Saved to SQLite successfully");
       res.json({ ok: true, updated_at });
     } else {
       // JSON fallback
       writeStateToJSON(state, updated_at);
+      console.log("💾 Saved to JSON successfully");
       res.json({ ok: true, updated_at });
     }
   } catch (err) {

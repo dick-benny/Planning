@@ -320,6 +320,7 @@
   // State store
   // ---------------------------
   let _state = null;
+  let _hydrationComplete = false;
 
   App.getState = function getState() { return _state; };
 
@@ -329,12 +330,19 @@
       try { localStorage.setItem(LS_STATE, JSON.stringify(st)); } catch (e) {}
       return;
     }
-    // Supabase mode: never persist app data to localStorage
+    
+    // Block saves until hydration completes in server mode
+    if (m === "server" && !_hydrationComplete) {
+      console.log("⏸️ Blocking save until hydration completes...");
+      return;
+    }
+    
+    // Server mode: save to remote
     try {
       if (App.DB && typeof App.DB.saveState === "function") {
         App.DB.saveState(st).catch(function (e) { console.warn("DB.saveState failed", e); });
       }
-    } catch (e) { console.warn("persistState supabase failed", e); }
+    } catch (e) { console.warn("persistState server failed", e); }
   }
 
   function loadState() {
@@ -659,6 +667,11 @@ App.listUsers = function listUsers(state) {
   // ---------------------------
   App.init = function init() {
     _state = ensureStateInvariants(loadState());
+    
+    // In local mode, hydration is complete immediately
+    if (getDataMode() === "local") {
+      _hydrationComplete = true;
+    }
 
     // Attach auth user (controls role) + acting user (impersonation)
     _state.session = _state.session || { authUser: null, actingUserId: "" };
@@ -675,8 +688,10 @@ App.listUsers = function listUsers(state) {
     
     // Use acting user as the "logged in" auth user in local demo
     _state.session.authUser = _state.user;
-// Persist user into state so it survives tab switches
-    persistState(_state);
+// Persist user into state so it survives tab switches (but not in server mode - we load from server first)
+    if (getDataMode() === "local") {
+      persistState(_state);
+    }
 
     // Ensure base UI exists
     if (USP.UI && typeof USP.UI.mountBase === "function") {
@@ -690,21 +705,37 @@ App.listUsers = function listUsers(state) {
     // Supabase mode: hydrate state from DB after first paint
     try {
       if (getDataMode() !== "local" && App.DB && typeof App.DB.loadState === "function") {
+        console.log("🚀 Starting state hydration from server...");
         App.DB.loadState().then(function (remote) {
-          if (!remote || typeof remote !== "object") return;
+          console.log("🔄 Hydrating state from server...", remote);
+          if (!remote || typeof remote !== "object") {
+            console.warn("⚠️ No remote state or invalid format:", remote);
+            _hydrationComplete = true; // Allow saves even if no remote data
+            return;
+          }
           // Merge remote into current state (keep session/auth from local init)
           const cur = App.getState();
+          console.log("📊 Current state before merge:", cur);
           const merged = deepClone(cur);
           if (remote.schemas) merged.schemas = remote.schemas;
           if (remote.data) merged.data = remote.data;
           if (remote.settings) merged.settings = remote.settings;
           merged.updatedAt = remote.updatedAt || merged.updatedAt || nowIso();
+          console.log("✅ State hydrated, committing...", merged);
+          _hydrationComplete = true; // Allow saves after hydration
           App.commitState(merged);
         }).catch(function (e) {
-          console.warn("DB.loadState failed", e);
+          console.error("❌ DB.loadState failed:", e);
+          _hydrationComplete = true; // Allow saves even on error
         });
+      } else {
+        console.log("ℹ️ Skipping remote hydration - mode:", getDataMode());
+        _hydrationComplete = true;
       }
-    } catch (e) { console.warn("hydrateFromRemote setup failed", e); }
+    } catch (e) { 
+      console.error("❌ hydrateFromRemote setup failed:", e);
+      _hydrationComplete = true;
+    }
 
     }
 
@@ -715,7 +746,9 @@ App.listUsers = function listUsers(state) {
   App._debugResetState = function () {
     localStorage.removeItem(LS_STATE);
     _state = ensureStateInvariants(defaultState());
-    persistState(_state);
+    if (getDataMode() === "local") {
+      persistState(_state);
+    }
     if (USP.UI && typeof USP.UI.render === "function") USP.UI.render(_state);
 
     // Supabase mode: hydrate state from DB after first paint

@@ -23,11 +23,13 @@
     if (mode() !== "server") return null;
     
     try {
+      console.log("📥 Loading state from /api/state...");
       const res = await fetch("/api/state");
       if (!res.ok) {
         throw new Error("Failed to load state: " + res.status);
       }
       const data = await res.json();
+      console.log("📥 Loaded state:", data);
       return data.state;
     } catch (err) {
       console.error("DB loadState error:", err);
@@ -39,6 +41,7 @@
     if (mode() !== "server") return { ok: true, skipped: true };
     
     try {
+      console.log("💾 Saving state to /api/state...", state);
       const res = await fetch("/api/state", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -51,6 +54,7 @@
       }
       
       const result = await res.json();
+      console.log("💾 Saved state:", result);
       return { ok: true, updated_at: result.updated_at };
     } catch (err) {
       console.error("DB saveState error:", err);
