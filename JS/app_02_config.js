@@ -20,14 +20,9 @@
     return fallback;
   };
 
-  // Data mode toggle: localhost => localStorage, otherwise Express server
-  App.Config.isLocalHost = function isLocalHost() {
-    const h = String(location && location.hostname ? location.hostname : "");
-    return (h === "localhost" || h === "127.0.0.1" || h.endsWith(".local"));
-  };
-
+  // Always use Express server + SQLite (no localStorage)
   App.Config.getDataMode = function getDataMode() {
-    return App.Config.isLocalHost() ? "local" : "server";
+    return "server";
   };
 
 })();
