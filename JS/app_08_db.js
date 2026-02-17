@@ -1,7 +1,6 @@
 /* app_08_db.js
    DB adapter:
-   - localhost: handled by bootstrap localStorage (no remote)
-   - non-localhost: Express + SQLite backend (/api/state endpoint)
+   - Always uses Express + SQLite backend (/api/state endpoint)
 */
 (function () {
   "use strict";

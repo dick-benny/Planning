@@ -198,10 +198,6 @@
       // Optional deterministic override (debug/local): "admin" | "user" | ""
       forceRole: "",
 
-      // Data mode (future): "local" | "supabase"
-      dataMode: "local",
-      supabase: { url: "", key: "", table: "usp_state", user_state_key: "latest" },
-
       // Local user directory (for Change user / Manage users)
       users: [
         { id: "u_dick", username:"dick", name: "Dick Eriksson", initials:"DE", email: "d.eriksson@cappelendimyr.com", role:"admin" },
@@ -348,7 +344,7 @@
   function loadState() {
     const m = getDataMode();
     if (m !== "local") {
-      // Supabase mode: start from default; remote hydration happens after UI mount.
+      // Server mode: start from default; remote hydration happens after UI mount.
       return defaultState();
     }
     const raw = localStorage.getItem(LS_STATE);
@@ -702,7 +698,7 @@ App.listUsers = function listUsers(state) {
     if (USP.UI && typeof USP.UI.render === "function") {
       USP.UI.render(_state);
 
-    // Supabase mode: hydrate state from DB after first paint
+    // Server mode: hydrate state from DB after first paint
     try {
       if (getDataMode() !== "local" && App.DB && typeof App.DB.loadState === "function") {
         console.log("🚀 Starting state hydration from server...");
@@ -751,7 +747,7 @@ App.listUsers = function listUsers(state) {
     }
     if (USP.UI && typeof USP.UI.render === "function") USP.UI.render(_state);
 
-    // Supabase mode: hydrate state from DB after first paint
+    // Server mode: hydrate state from DB after first paint
     try {
       if (getDataMode() !== "local" && App.DB && typeof App.DB.loadState === "function") {
         App.DB.loadState().then(function (remote) {
