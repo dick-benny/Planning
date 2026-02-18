@@ -27,24 +27,26 @@
   App.Config.getSupabaseKey = function () {
     return App.Config.get("NEXT_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY", "");
   };
+  // VERSION 70: Use Supabase ONLY on production host
+  App.Config = App.Config || {};
+  (function(){
+    const host = String((location && location.hostname) || "");
+    const isProdHost = (host === "planning.cappelendimyr.com");
+    App.Config.DB_MODE = isProdHost ? "supabase" : "local";
+    // Supabase public credentials (only used when DB_MODE === "supabase")
+    App.Config.SUPABASE_URL = "https://nchgudsqleylfdysgabi.supabase.co";
+    App.Config.SUPABASE_PUBLISHABLE_KEY = "sb_publishable_TBIHlzs-Cw-fJfjUvkzzfw_mhrTLuLw";
+    try { console.log("[config] host=", host, "DB_MODE=", App.Config.DB_MODE); } catch(e) {}
+  })();
 
 
-  // VERSION 69: Data mode toggle (localhost => localStorage, otherwise Supabase)
-  App.Config.isLocalHost = function isLocalHost() {
-    const h = String(location && location.hostname ? location.hostname : "");
-    return (h === "localhost" || h === "127.0.0.1" || h.endsWith(".local"));
+  // VERSION 71: Default registries (hardcoded lists)
+  App.Config = App.Config || {};
+  App.Config.DEFAULT_REGISTRIES = App.Config.DEFAULT_REGISTRIES || {
+    produktkategori: ["matta","tapestry","colonnade","softass","paketering"],
+    projektkategori: ["kundprojekt","volymprojekt","samarbetsprojekt"],
+    todokategori: ["Allmänt","Info","Shopify-B2C","Shopify-B2B","Logistik","Privat"]
   };
 
-  App.Config.getDataMode = function getDataMode() {
-    return App.Config.isLocalHost() ? "local" : "supabase";
-  };
-
-  // Default Supabase (can be overridden via window.__ENV__)
-  App.Config.getSupabaseUrl = function () {
-    return App.Config.get("NEXT_PUBLIC_SUPABASE_URL", "https://nchgudsqleylfdysgabi.supabase.co");
-  };
-  App.Config.getSupabaseKey = function () {
-    return App.Config.get("NEXT_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY", "sb_publishable_TBIHlzs-Cw-fJfjUvkzzfw_mhrTLuLw");
-  };
 
 })();

@@ -1,4 +1,4 @@
-// [fieldtypes v111]
+// [fieldtypes v116]
 /* app_09_fieldtypes_07.js
    Dynamic FieldTypes: base + addons (mods)
 
@@ -109,7 +109,7 @@
     if (!x0) return "text";
     if (x0 === "datum" || x0 === "calendar" || x0 === "kalender") return "date";
     if (x0 === "veckonummer" || x0 === "veckokalender" || x0 === "weeknumber" || x0 === "weekcalendar") return "week";
-    if (["text","status","date","week","produktkategori"].includes(x0)) return x0;
+    if (["text","status","date","week","produktkategori","dropdown_produktkategori","todokategori"].includes(x0)) return x0;
     return "text";
   }
 
@@ -234,18 +234,17 @@
       style:"width:100%;min-width:12ch;"
     }, []);
 
-    let t = null;
-    function flush() {
-      if (t) { clearTimeout(t); t = null; }
+    function commit() {
+      if (disabled) return;
       if (ctx && typeof ctx.onChange === "function") ctx.onChange(input.value);
     }
 
-    input.addEventListener("input", function () {
+    // Commit on blur/enter only (avoids rerender loops that can truncate to 1 char)
+    input.addEventListener("blur", function () { commit(); });
+    input.addEventListener("keydown", function (e) {
       if (disabled) return;
-      if (t) clearTimeout(t);
-      t = setTimeout(flush, 250);
+      if (e.key === "Enter") { e.preventDefault(); try { input.blur(); } catch(_) {} commit(); }
     });
-    input.addEventListener("blur", function () { flush(); });
 
     return wrapActField(input, ctx);
   }
@@ -256,6 +255,13 @@
 
     const display = el("div", { class:"act-date-display", text: value || "-- -- --", style:"width:15ch;min-width:15ch;max-width:15ch;font-size:0.85em;text-align:center;" }, []);
     const picker = el("input", { class:"act-date-picker", type:"date", value, disabled, style:"width:15ch;min-width:15ch;max-width:15ch;font-size:0.85em;text-align:center;" }, []);
+
+    const isOverdue = !!((ctx && ctx.overdue) || (ctx && ctx.mods && ctx.mods.overdue));
+    if (isOverdue) {
+      const s = "border:3px solid red;";
+      try { display.style.border = "3px solid red"; } catch(e) {}
+      try { picker.style.border = "3px solid red"; } catch(e) {}
+    }
 
     function openPicker() {
       if (disabled) return;
@@ -333,6 +339,43 @@
   // VERSION 109: Projekt kategori dropdown (fixed list)
   const PROJECT_CATEGORIES = ["kundprojekt","volymprojekt","samarbetsprojekt"];
 
+  // Produktkategori från register (state.settings)
+  function getProduktkategoriRegisterValues() {
+    try {
+      const st = (App && typeof App.getState === "function") ? App.getState() : null;
+      const s = st && st.settings ? st.settings : null;
+      // allow several possible shapes
+      const a =
+        (s && Array.isArray(s.produktkategori)) ? s.produktkategori :
+        (s && Array.isArray(s.productCategories)) ? s.productCategories :
+        (s && s.registries && Array.isArray(s.registries.produktkategori)) ? s.registries.produktkategori :
+        null;
+      if (a && a.length) return a.map(x => String(x)).filter(Boolean);
+    } catch (e) {}
+    // fallback: use the hardcoded list from renderProduktkategori
+    return ["Matta","Tapestry","Colonnade","Paketering","Soft ass"];
+  }
+
+  function renderDropdownProduktkategori(ctx) {
+    const disabled = !!(ctx && ctx.disabled);
+    const value = normalizeValue("dropdown_produktkategori", ctx && ctx.value);
+    const values = getProduktkategoriRegisterValues();
+    const allowed = [{ v:"", label:"--" }].concat(values.map(v => ({ v, label:v })));
+
+    const sel = el("select", { class:"act-value-input", disabled }, []);
+    allowed.forEach(o => {
+      const opt = el("option", { value:o.v }, [o.label]);
+      if (String(o.v) === String(value)) opt.selected = true;
+      sel.appendChild(opt);
+    });
+    sel.addEventListener("change", () => {
+      if (typeof ctx.onChange === "function") ctx.onChange(sel.value);
+    });
+    const inner = el("div", { class:"act-field" }, [sel]);
+    return wrapActField(inner, ctx);
+  }
+
+
   function renderProjektkategori(ctx) {
     const disabled = !!(ctx && ctx.disabled);
     const value = String(ctx && ctx.value != null ? ctx.value : "");
@@ -382,6 +425,7 @@ const TODO_CATEGORIES = ["Allmänt","Info","Shopify-B2C","Shopify-B2B","Logistik
     if (base === "date") return renderDate(next);
     if (base === "week") return renderWeek(next);
     if (base === "produktkategori") return renderProduktkategori(next);
+    if (base === "dropdown_produktkategori") return renderDropdownProduktkategori(next);
     if (base === "projektkategori") return renderProjektkategori(next);
     if (base === "todokategori") return renderTodoKategori(next);
     // status base uses text-less field; the corner is the editor itself
@@ -394,7 +438,8 @@ const TODO_CATEGORIES = ["Allmänt","Info","Shopify-B2C","Shopify-B2B","Logistik
     { key:"status", label:"Status" },
     { key:"date", label:"Datum" },
     { key:"week", label:"Vecka" },
-    { key:"produktkategori", label:"Produktkategori" },
+    { key:"produktkategori", label:"Produktkategori (fast lista)" },
+    { key:"dropdown_produktkategori", label:"Produktkategori (register)" },
     { key:"todokategori", label:"ToDo-kategori" },
   ];
 
@@ -409,6 +454,8 @@ const TODO_CATEGORIES = ["Allmänt","Info","Shopify-B2C","Shopify-B2B","Logistik
   App.FieldTypes.normalizeBaseType = normalizeBaseType;
   App.FieldTypes.normalizeValue = normalizeValue;
   App.FieldTypes.isoWeekKeyFromDate = isoWeekKeyFromDate;
+
+  App.FieldTypes.list = function () { return baseList.slice(); };
 
   App.FieldTypes.listBase = function () { return baseList.slice(); };
   App.FieldTypes.listMods = function () { return modList.slice(); };

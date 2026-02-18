@@ -1,3 +1,4 @@
+// [ui v237]
 /* app_04_ui_92.js
    USP UI (design-restored via style.css classes)
    - Keeps v60+ deterministic router: tab + role -> view
@@ -10,6 +11,92 @@
   window.USP = window.USP || {};
   const USP = window.USP;
   const UI = (USP.UI = USP.UI || {});
+
+  // ---------------------------
+  // Shared helpers (global scope)
+  // ---------------------------
+  function tableTitleForTab(tabKey) {
+    try {
+      if (tabKey === App.Tabs.DEV) return "Utveckling";
+      if (tabKey === App.Tabs.PRODUCT) return "Sälj-intro";
+      if (tabKey === App.Tabs.TODO) return "ToDo";
+      if (tabKey === App.Tabs.PROJECT) return "Projekt";
+      if (tabKey === App.Tabs.ROUTINES) return "Rutiner";
+      if (tabKey === App.Tabs.SETTINGS) return "Settings";
+    } catch(e) {}
+
+  function rowDisplayNameForNotes(tabKey, row, st) {
+    try {
+      const r = row || {};
+      const f = r.fields || {};
+      if (tabKey === App.Tabs.TODO) return String(f["Beskrivning"] || "");
+      if (tabKey === App.Tabs.PROJECT) return String(f["Projektnamn"] || "");
+      if (tabKey === App.Tabs.ROUTINES) return String(f["Rutin"] || "");
+      const schema = (App.getSchema ? App.getSchema(tabKey, st) : null) || {};
+      const cols = schema.fields || schema.columns || [];
+      if (cols && cols.length) {
+        const first = cols[0];
+        const name = first.name || first.key || first.label || first.title;
+        if (name) return String(f[name] || "");
+      }
+      const keys = Object.keys(f);
+      if (keys.length) return String(f[keys[0]] || "");
+    } catch(e) {}
+    return "";
+  }
+    return String(tabKey || "");
+  }
+
+  function openInitialsPicker(tabKey, rowId, fieldName, currentValue, onPick) {
+    if (typeof closeAnyModal === "function") closeAnyModal();
+    const st = (App && App.getState) ? App.getState() : {};
+    const users = (App && typeof App.listUsers === "function") ? (App.listUsers(st) || []) : [];
+    const title = tableTitleForTab(tabKey) + " – " + String(fieldName || "Ansvarig");
+
+    const overlay = el("div", { class: "usp-modal-overlay" }, []);
+    const modal = el("div", { class: "usp-modal" }, []);
+    modal.appendChild(el("div", { class: "modal-title" }, [title]));
+
+    const list = el("div", { class: "modal-list" }, []);
+    let selected = String(currentValue || "").trim() || "--";
+
+    users.forEach(function(u){
+      const ini = (u && u.initials) ? String(u.initials) : "";
+      if (!ini) return;
+      const lab = el("label", { class: "modal-check" }, []);
+      const cb = el("input", { type:"checkbox" }, []);
+      cb.checked = (ini === selected);
+      cb.addEventListener("change", function(){
+        if (cb.checked) {
+          selected = ini;
+          const cbs = list.querySelectorAll("input[type=checkbox]");
+          cbs.forEach(function(x){ if (x !== cb) x.checked = false; });
+        } else {
+          selected = "--";
+        }
+      });
+      const name = (u && u.name) ? String(u.name) : ini;
+      lab.appendChild(cb);
+      lab.appendChild(el("span", { class:"modal-check-name" }, [ini + " – " + name]));
+      list.appendChild(lab);
+    });
+
+    const actions = el("div", { class: "modal-actions" }, []);
+    const btnCancel = el("button", { class:"btn", type:"button" }, ["Cancel"]);
+    const btnSave = el("button", { class:"btn", type:"button" }, ["Save"]);
+    btnCancel.addEventListener("click", function(){ overlay.remove(); });
+    btnSave.addEventListener("click", function(){
+      if (typeof onPick === "function") onPick(selected);
+      overlay.remove();
+    });
+    actions.appendChild(btnCancel);
+    actions.appendChild(btnSave);
+
+    modal.appendChild(list);
+    modal.appendChild(actions);
+    overlay.appendChild(modal);
+    document.body.appendChild(overlay);
+  }
 
   // ---------------------------
   // Settings popover (compact)
@@ -529,14 +616,145 @@ function isOverdueDate(val) {
     }).join("\n\n---\n\n");
   }
 
-  function promptAddNote(existingLog) {
-    const header = existingLog && existingLog.length ? ("Befintliga anteckningar:\n\n" + formatNotesLog(existingLog) + "\n\n---\n\n") : "";
-    const v = window.prompt(header + "Ny anteckning:", "");
-    if (v === null) return null;
-    const t = String(v || "").trim();
-    if (!t) return ""; // allow clearing (no append)
-    return t;
+  
+  function openNotesModal(tabKey, fieldName, existingLog, onSave) {
+    closeAnyModal();
+    const rowName = String(arguments[4] || "");
+    const title = tableTitleForTab(tabKey) + " – " + (rowName ? (rowName + " – ") : "") + String(fieldName || "Anteckning");
+    const overlay = el("div", { class: "usp-modal-overlay" }, []);
+    const modal = el("div", { class: "usp-modal" }, []);
+    const h = el("div", { class: "modal-title" }, [title]);
+
+    const existing = el("div", { class: "modal-notes-existing" }, []);
+    if (existingLog && existingLog.length) {
+      existing.appendChild(el("div", { class:"modal-notes-label" }, ["Befintliga anteckningar:"]));
+      existing.appendChild(el("pre", { class:"modal-notes-pre" }, [formatNotesLog(existingLog)]));
+    }
+
+    const ta = el("textarea", { class:"modal-textarea", rows:"5", placeholder:"Skriv anteckning..." }, []);
+
+    const actions = el("div", { class: "modal-actions" }, []);
+    const btnCancel = el("button", { class:"btn", type:"button" }, ["Cancel"]);
+    const btnSave = el("button", { class:"btn", type:"button" }, ["Save"]);
+    btnCancel.addEventListener("click", function(){ overlay.remove(); });
+    btnSave.addEventListener("click", function(){
+      const t = String(ta.value || "").trim();
+      if (typeof onSave === "function") onSave(t);
+      overlay.remove();
+    });
+    actions.appendChild(btnCancel);
+    actions.appendChild(btnSave);
+
+    modal.appendChild(h);
+    if (existingLog && existingLog.length) modal.appendChild(existing);
+    modal.appendChild(ta);
+    modal.appendChild(actions);
+    overlay.appendChild(modal);
+    document.body.appendChild(overlay);
+    try { ta.focus(); } catch(e) {}
   }
+
+
+  // VERSION 249: Global notes helpers (blue icon + click) used across views
+  function hasNotesInCell(row, fieldName) {
+    try {
+      const fields = (row && row.fields) ? row.fields : {};
+      const log = readNotesLog(fields, fieldName);
+      return Array.isArray(log) && log.length > 0;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  function addNoteToCell(tabKey, rowId, fieldName) {
+    const st = App.getState();
+    const row = getRowSafe(tabKey, rowId, st);
+    if (!row) return;
+    const fields = Object.assign({}, row.fields || {});
+    const existing = readNotesLog(fields, fieldName);
+    openNotesModal(tabKey, fieldName, existing, function(t){
+      if (!t) return;
+      const nextLog = existing.concat([{ ts: new Date().toISOString(), by: (App.getActingUser ? ((App.getActingUser(st).initials)||"") : ""), text: t }]);
+      writeNotesLog(fields, fieldName, nextLog);
+      const nextRow = Object.assign({}, row, { fields, updatedAt: new Date().toISOString() });
+      App.upsertRow(tabKey, nextRow);
+    });
+  }
+
+  // Close any open modal overlays (prevents modals leaking into other tabs)
+  function closeAnyModal() {
+    try {
+      const els = document.querySelectorAll(".usp-modal-overlay, .usp-modal, .modal-overlay, .modal");
+      els.forEach(el => { try { el.remove(); } catch(e){} }, rowName);
+    } catch(e) {}
+
+
+  function tableTitleForTab(tabKey) {
+    if (tabKey === App.Tabs.DEV) return "Utveckling";
+    if (tabKey === App.Tabs.PRODUCT) return "Sälj-intro";
+    if (tabKey === App.Tabs.TODO) return "ToDo";
+    if (tabKey === App.Tabs.PROJECT) return "Projekt";
+    if (tabKey === App.Tabs.ROUTINES) return "Rutiner";
+    if (tabKey === App.Tabs.SETTINGS) return "Settings";
+    return String(tabKey || "");
+  }
+
+
+  function openInitialsPicker(tabKey, rowId, fieldName, currentValue, onPick) {
+    closeAnyModal();
+    const st = App.getState();
+    const users = (typeof App.listUsers === "function") ? (App.listUsers(st) || []) : [];
+    const title = tableTitleForTab(tabKey) + " – " + String(fieldName || "Ansvarig");
+    const overlay = el("div", { class: "usp-modal-overlay" }, []);
+    const modal = el("div", { class: "usp-modal" }, []);
+    const h = el("div", { class: "modal-title" }, [title]);
+    const list = el("div", { class: "modal-list" }, []);
+
+    let selected = String(currentValue || "").trim() || "--";
+    users.forEach(function(u){
+      const ini = (u && u.initials) ? String(u.initials) : "";
+      if (!ini) return;
+      const row = el("label", { class: "modal-check" }, []);
+      const cb = el("input", { type:"checkbox" }, []);
+      cb.checked = (ini === selected);
+      cb.addEventListener("change", function(){
+        // single select behavior
+        if (cb.checked) {
+          selected = ini;
+          const cbs = list.querySelectorAll("input[type=checkbox]");
+          cbs.forEach(function(x){ if (x !== cb) x.checked = false; });
+        } else {
+          selected = "--";
+        }
+      });
+      const name = (u && u.name) ? String(u.name) : ini;
+      row.appendChild(cb);
+      row.appendChild(el("span", { class:"modal-check-name" }, [ini]));
+      list.appendChild(row);
+    });
+
+    const actions = el("div", { class: "modal-actions" }, []);
+    const btnCancel = el("button", { class:"btn", type:"button" }, ["Cancel"]);
+    const btnSave = el("button", { class:"btn", type:"button" }, ["Save"]);
+    btnCancel.addEventListener("click", function(){
+      overlay.remove();
+    });
+    btnSave.addEventListener("click", function(){
+      if (typeof onPick === "function") onPick(selected);
+      overlay.remove();
+    });
+    actions.appendChild(btnCancel);
+    actions.appendChild(btnSave);
+
+    modal.appendChild(h);
+    modal.appendChild(list);
+    modal.appendChild(actions);
+    overlay.appendChild(modal);
+    document.body.appendChild(overlay);
+  }
+
+  }
+
 
   function getRowSafe(tabKey, rowId, state) {
     try {
@@ -650,7 +868,7 @@ function isOverdueDate(val) {
   // ---------------------------
   function tabLabel(key) {
     if (key === App.Tabs.DEV) return "UTVECKLING";
-    if (key === App.Tabs.PRODUCT) return "SÄLJ";
+    if (key === App.Tabs.PRODUCT) return "SÄLJINTRO";
     if (key === App.Tabs.TODO) return "TODO";
     if (key === App.Tabs.PROJECT) return "PROJEKT";
     if (key === App.Tabs.ROUTINES) return "RUTINER";
@@ -666,17 +884,17 @@ function isOverdueDate(val) {
       el("div", { class: "logo" }, ["U"]),
       el("div", {}, [
         el("div", { class: "brand-title" }, ["USP"]),
-        el("div", { class: "brand-sub" }, ["backend redo"]),
+        el("div", { class: "brand-sub" }, [""]),
       ]),
     ]);
 
     const tabs = el("div", { class: "tabs", id: "tabs" }, []);
     const current = App.getTab(state);
-    [App.Tabs.DEV, App.Tabs.PRODUCT, App.Tabs.TODO, App.Tabs.PROJECT, App.Tabs.ROUTINES].forEach((k) => {
+    [App.Tabs.DEV, App.Tabs.PRODUCT, App.Tabs.PROJECT, App.Tabs.TODO, App.Tabs.ROUTINES].forEach((k) => {
       tabs.appendChild(el("button", {
-        class: "tab " + (current === k ? "is-active" : ""),
+        class: "tab " + ((current === k || (k === (App.Tabs && App.Tabs.PROJECT) && String(current) === "project")) ? "is-active" : ""),
         type: "button",
-        onclick: () => App.setTab(k),
+        onclick: () => { const __t = k; App.setTab((__t === (App.Tabs && App.Tabs.PROJECT)) ? "project" : __t); },
       }, [tabLabel(k)]));
     });
 
@@ -725,7 +943,7 @@ function isOverdueDate(val) {
 
   function sortFields(fields) {
     const arr = Array.isArray(fields) ? fields.slice() : [];
-    arr.sort((a,b)=> (a?.order ?? 0) - (b?.order ?? 0));
+    arr.sort((a,b)=> (((a && a.order) != null ? (a && a.order) : 0) - (((b && b.order) != null ? (b && b.order) : 0))));
     return arr;
   }
 
@@ -845,7 +1063,7 @@ function adminSchemaView(state, tabKey, title) {
 
         // Ordning
         tr.appendChild(el("td", {}, [
-          el("input", { class: inputClass(), value: String(f.order ?? idx), style:"width:72px;", onchange: (e) => {
+          el("input", { class: inputClass(), value: String((f.order != null ? f.order : idx)), style:"width:72px;", onchange: (e) => {
             f.order = parseInt(e.target.value, 10);
             if (!Number.isFinite(f.order)) f.order = idx;
             App.setSchema(tabKey, schema);
@@ -900,7 +1118,7 @@ function adminSchemaView(state, tabKey, title) {
     const fieldNames = fields.map(f => String(f.name || "").trim()).filter(Boolean);
 
     const modal = el("div", { class:"modal-backdrop" }, [
-      el("div", { class:"modal", style:"max-width:920px;" }, [
+      el("div", { class:"usp-modal", style:"max-width:920px;" }, [
         el("div", { class:"modal-head" }, [
           el("div", { class:"title" }, [title + " – Arkiv"]),
           el("button", { class:"btn btn-secondary", type:"button", onclick: () => modal.remove() }, ["Stäng"]),
@@ -912,11 +1130,12 @@ function adminSchemaView(state, tabKey, title) {
                 const table = el("table", { class:"table" }, []);
                 table.appendChild(el("thead", {}, [el("tr", {}, [
                   ...fieldNames.map(n => el("th", { style: (n==="Kategori" ? "width:17ch;" : (n==="Klart" ? "width:12ch;" : null)) }, [n])),
+        ...((allowDelete || routinesEditable) ? [el("th", { style:"text-align:right;width:16ch;" }, [ (routinesEditable ? "Ta bort" : "") ])] : []),
                 ])]));
                 const tb = el("tbody", {}, []);
                 rows.forEach((r) => {
                   const tr = el("tr", {}, []);
-                  fieldNames.forEach((n) => tr.appendChild(el("td", {}, [String((r.fields && r.fields[n]) ?? "")])));
+                  fieldNames.forEach((n) => tr.appendChild(el("td", {}, [String(((r.fields && r.fields[n]) != null ? (r.fields && r.fields[n]) : ""))])));
                   tr.appendChild(el("td", { style:"white-space:nowrap;" }, [
                     el("button", { class:"btn btn-small", type:"button", onclick: () => {
                       const ok = window.confirm("Återställa raden från arkiv?");
@@ -1000,6 +1219,31 @@ function adminSchemaView(state, tabKey, title) {
     }
   }
 function userDataView(state, tabKey, title, opts) {
+    // VERSION 246: notes helpers for user tables (incl routines)
+    function onNotesClick(rowId, fieldName) {
+      const st = App.getState();
+      const row = getRowSafe(tabKey, rowId, st);
+      if (!row) return;
+      const fields = Object.assign({}, row.fields || {});
+      const existing = readNotesLog(fields, fieldName);
+      openNotesModal(tabKey, fieldName, existing, function(t){
+        if (!t) return;
+        const byIni = (App.getActingUser ? ((App.getActingUser(st).initials)||"") : "");
+        const nextLog = existing.concat([{ ts: new Date().toISOString(), by: byIni, text: t }]);
+        writeNotesLog(fields, fieldName, nextLog);
+        const nextRow = Object.assign({}, row, { fields, updatedAt: new Date().toISOString() });
+        App.upsertRow(tabKey, nextRow);
+      });
+      }
+
+    function hasNotesInCell(row, fieldName) {
+      try {
+        const log = readNotesLog((row && row.fields) || {}, fieldName);
+        return Array.isArray(log) && log.length > 0;
+      } catch (e) {
+        return false;
+      }
+    }
     const view = byId("usp-view");
     if (!view) return;
     setHtml(view, "");
@@ -1013,6 +1257,7 @@ function userDataView(state, tabKey, title, opts) {
 
     const routinesEditable = isRoutines && !!(opts && opts.routinesEditable);
     const routinesReadOnly = isRoutines && !routinesEditable;
+    const allowDelete = (!isRoutines) && (tabKey === App.Tabs.DEV || tabKey === App.Tabs.PRODUCT);
 
     // User works with data; routines are read-only.
     const rowsAll = (App.listRows(tabKey, state) || []);
@@ -1044,7 +1289,7 @@ function userDataView(state, tabKey, title, opts) {
 
     view.appendChild(hero(
       title,
-      isRoutines ? (routinesEditable ? "Admin skapar rutiner (ny rutin = Ny rad). User kan bara läsa." : "Rutiner är en passiv beskrivning som kan läsas av alla.") : "Här jobbar user med data. Admin definierar fälten i samma tab.",
+      isRoutines ? (routinesEditable ? "Admin skapar rutiner (ny rutin = Ny rad). User kan bara läsa." : "Rutiner är en passiv beskrivning som kan läsas av alla.") : "",
       heroButtons
     ));
 
@@ -1054,6 +1299,7 @@ function userDataView(state, tabKey, title, opts) {
     table.appendChild(el("thead", {}, [
       el("tr", {}, [
         ...fieldNames.map(n => el("th", { style: (n==="Kategori" ? "width:17ch;" : (n==="Klart" ? "width:12ch;" : null)) }, [n])),
+        ...(allowDelete ? [el("th", { style:"text-align:right;width:16ch;" }, [""])] : []),
       ])
     ]));
 
@@ -1069,21 +1315,39 @@ function userDataView(state, tabKey, title, opts) {
         const tr = el("tr", {}, []);
         fieldNames.forEach((n) => {
           if (routinesReadOnly) {
-            tr.appendChild(el("td", {}, [String((r.fields && r.fields[n]) ?? "")]));
+            const field = (fields || []).find(x => String(x.name || "").trim() === n) || { name: n, type: "text", mods: { notes: true } };
+            const tkey = (App.FieldTypes && App.FieldTypes.normalizeType) ? App.FieldTypes.normalizeType(field.type) : String(field.type || "text");
+            const cellVal = ((r.fields && r.fields[n]) != null ? (r.fields && r.fields[n]) : "");
+            tr.appendChild(el("td", {}, [
+              (App.FieldTypes && typeof App.FieldTypes.renderEditor === "function")
+                ? App.FieldTypes.renderEditor({
+                    baseType: tkey,
+                    mods: (field && field.mods) ? field.mods : { notes: true },
+                    value: cellVal,
+                    disabled: true,
+                    notesHas: hasNotesInCell(r, n),
+                    onNotesClick: (field && field.mods && field.mods.notes) ? (() => addNoteToCell(tabKey, r.id, n)) : null,
+                    onChange: function(){},
+                  })
+                : String(cellVal)
+            ]));
             return;
           }
           tr.appendChild(el("td", {}, [
             (function () {
               const field = (fields || []).find(x => String(x.name || "").trim() === n) || { name: n, type: "text" };
               const tkey = (App.FieldTypes && App.FieldTypes.normalizeType) ? App.FieldTypes.normalizeType(field.type) : String(field.type || "text");
+              const cellVal = ((r.fields && r.fields[n]) != null ? (r.fields && r.fields[n]) : "");
 
               // Routines: read-only already handled above.
               if (App.FieldTypes && typeof App.FieldTypes.renderEditor === "function") {
                 return App.FieldTypes.renderEditor({
                   baseType: tkey,
                   mods: (field && field.mods) ? field.mods : {},
-                  value: (r.fields && r.fields[n]) ?? "",
+                  value: cellVal,
                   disabled: false,
+                  notesHas: (field && field.mods && field.mods.notes) ? hasNotesInCell(r, n) : false,
+                  onNotesClick: (field && field.mods && field.mods.notes) ? (() => addNoteToCell(tabKey, r.id, n)) : null,
                   // base value change
                   onChange: (val) => {
                     const st = App.getState();
@@ -1094,7 +1358,7 @@ function userDataView(state, tabKey, title, opts) {
                     App.upsertRow(tabKey, next);
                   },
                   // corner addon (stored separately)
-                  cornerValue: (r.fields && r.fields[cornerKeyFor(n)]) ?? "",
+                  cornerValue: ((r.fields && r.fields[cornerKeyFor(n)]) != null ? (r.fields && r.fields[cornerKeyFor(n)]) : ""),
                   onCornerChange: ((field && field.mods && field.mods.corner) || tkey === "status") ? (cval) => {
                     const st = App.getState();
                     const cur = (getRowSafe(tabKey, r.id, st) || r);
@@ -1105,16 +1369,17 @@ function userDataView(state, tabKey, title, opts) {
                     App.upsertRow(tabKey, next);
                   } : undefined,
                   // initials addon
-                  initialsValue: (r.fields && r.fields[initialsKeyFor(n)]) ?? "--",
+                  initialsValue: ((r.fields && r.fields[initialsKeyFor(n)]) != null ? (r.fields && r.fields[initialsKeyFor(n)]) : "--"),
                   onInitialsClick: (field && field.mods && field.mods.initials) ? () => {
-                    const curIni = (r.fields && r.fields[initialsKeyFor(n)]) ?? "--";
-                    const pick = promptPickInitials(curIni);
-                    if (pick === null) return;
-                    const st = App.getState();
-                    const cur = (getRowSafe(tabKey, r.id, st) || r);
-                    const next = { id: cur.id, createdAt: cur.createdAt, updatedAt: new Date().toISOString(), archived: !!cur.archived, fields: Object.assign({}, cur.fields || {}) };
-                    next.fields[initialsKeyFor(n)] = String(pick || "--");
-                    App.upsertRow(tabKey, next);
+                    const curIni = ((r.fields && r.fields[initialsKeyFor(n)]) != null ? (r.fields && r.fields[initialsKeyFor(n)]) : "--");
+                    openInitialsPicker(tabKey, r.id, n, curIni, function(pick){
+                      if (!pick) pick = "--";
+                      const st = App.getState();
+                      const cur = (getRowSafe(tabKey, r.id, st) || r);
+                      const next = { id: cur.id, createdAt: cur.createdAt, updatedAt: new Date().toISOString(), fields: Object.assign({}, cur.fields || {}) };
+                      next.fields[initialsKeyFor(n)] = String(pick || "--");
+                      App.upsertRow(tabKey, next);
+                    });
                   } : undefined,
                   // notes addon (log)
                   notesHas: (function () {
@@ -1127,20 +1392,18 @@ function userDataView(state, tabKey, title, opts) {
                       const next2 = { id: cur2.id, createdAt: cur2.createdAt, updatedAt: new Date().toISOString(), archived: !!cur2.archived, fields: Object.assign({}, cur2.fields || {}) };
 
                       const log = readNotesLog(next2.fields, n);
-                      const add = promptAddNote(log);
-                      if (add === null) return;
-
-                      if (add) {
+                      openNotesModal(tabKey, n, log, function(add){
+                        if (!add) return;
                         log.push({ ts: new Date().toISOString(), by: currentInitials(), text: add });
                         writeNotesLog(next2.fields, n, log);
                         App.upsertRow(tabKey, next2);
-                      }
-                    } catch (e) { console.error(e); }
+                      });
+                      } catch (e) { console.error(e); }
                   } : undefined
                 });}
 
               // fallback to text input
-              const inp = el("input", { class: inputClass(), value: String((r.fields && r.fields[n]) ?? "") }, []);
+              const inp = el("input", { class: inputClass(), value: String(((r.fields && r.fields[n]) != null ? (r.fields && r.fields[n]) : "")) }, []);
               inp.addEventListener("input", (e) => {
                 const st = App.getState();
                 const cur = (getRowSafe(tabKey, r.id, st) || r);
@@ -1153,9 +1416,44 @@ function userDataView(state, tabKey, title, opts) {
           ]));
         });
 
-        if (!isRoutines) {
-          tr.appendChild(el("td", { style:"white-space:nowrap;" }, [
-            el("button", { class:"btn btn-small", type:"button", onclick: () => handleDone(App.getState(), tabKey, r) }, [doneLabel()])
+        if (allowDelete) {
+          // DEV/PRODUCT: DONE + Ta bort
+          tr.appendChild(el("td", { style:"white-space:nowrap;text-align:right;" }, [
+            el("button", { class:"btn btn-small", type:"button", onclick: () => {
+              const ok = window.confirm("Klarmarkera (DONE) och arkivera raden?");
+              if (!ok) return;
+              try { App.archiveRow(tabKey, r.id); } catch(e) { console.error(e); }
+              rerender();
+            }}, ["DONE"]),
+            el("span", { style:"display:inline-block;width:8px;" }, [""]),
+            el("button", { class:"btn btn-small", type:"button", onclick: () => {
+              const ok = window.confirm("Ta bort raden permanent?");
+              if (!ok) return;
+              try {
+                const st = App.getState();
+                const list = Array.isArray(st.data && st.data[tabKey]) ? st.data[tabKey] : [];
+                st.data = st.data || {};
+                st.data[tabKey] = list.filter(x => x && x.id !== r.id);
+                App.commitState(st);
+              } catch(e) { console.error(e); }
+              rerender();
+            }}, ["Ta bort"])
+          ]));
+        } else if (routinesEditable) {
+          // ROUTINES admin: only Ta bort
+          tr.appendChild(el("td", { style:"white-space:nowrap;text-align:right;" }, [
+            el("button", { class:"btn btn-small", type:"button", onclick: () => {
+              const ok = window.confirm("Ta bort raden permanent?");
+              if (!ok) return;
+              try {
+                const st = App.getState();
+                const list = Array.isArray(st.data && st.data[tabKey]) ? st.data[tabKey] : [];
+                st.data = st.data || {};
+                st.data[tabKey] = list.filter(x => x && x.id !== r.id);
+                App.commitState(st);
+              } catch(e) { console.error(e); }
+              rerender();
+            }}, ["Ta bort"])
           ]));
         }
 
@@ -1188,10 +1486,10 @@ function todoView(state, tabKey, title) {
   const views = (document && document.querySelectorAll) ? document.querySelectorAll("#usp-view") : [];
   const view = views && views.length ? views[0] : byId("usp-view");
   if (!view) return;
-  try { (views || []).forEach(v => setHtml(v, "")); } catch (e) { setHtml(view, ""); }
-
   if (_todoRenderedTick === _renderTick) return;
   _todoRenderedTick = _renderTick;
+
+  try { (views || []).forEach(v => setHtml(v, "")); } catch (e) { setHtml(view, ""); }
 
   ensureFixedTodoSchema(tabKey, state);
   // housekeeping on week change
@@ -1248,7 +1546,7 @@ function todoView(state, tabKey, title) {
       next.session = next.session || {};
       next.session.todoOnlyMine = !next.session.todoOnlyMine;
       App.commitState(next);
-    }}, ["Mina sidor"]),
+    }}, ["Mina ToDo"]),
     el("button", { class: btnClass("primary"), type:"button", onclick: () => { openNewTodoModal(tabKey, App.getState()); } }, ["Ny ToDo"]),
     el("button", { class: btnClass("secondary"), type:"button", onclick: () => {
       openArchiveModal(App.getState(), tabKey, title);
@@ -1305,7 +1603,13 @@ function todoView(state, tabKey, title) {
     }
 
     if (onlyMine) {
-      rows = rows.filter(r => String((r.meta && r.meta.owner) || "") === ownerKey);
+      const myIni = String(acting.initials || "").trim();
+      rows = rows.filter(r => {
+        const ownerOk = String((r.meta && r.meta.owner) || "") === ownerKey;
+        const resp = String((r.fields && r.fields[initialsKeyFor("Beskrivning")]) || "").trim();
+        const respOk = !!myIni && resp === myIni;
+        return ownerOk || respOk;
+      });
     }
 
     if (showLatest) {
@@ -1367,6 +1671,7 @@ function todoView(state, tabKey, title) {
   let _todoNewModalOpen = false;
 
   function openNewTodoModal(tabKey, state) {
+    closeAnyModal();
     if (_todoNewModalOpen) return;
     _todoNewModalOpen = true;
 
@@ -1388,7 +1693,10 @@ function todoView(state, tabKey, title) {
 
     function save() {
       try {
-        const k = tabKey || (App.Tabs && App.Tabs.TODO ? App.Tabs.TODO : "todo");
+        const k = (App.Tabs && App.Tabs.TODO) ? App.Tabs.TODO : "todo";
+        // Validate required fields
+        if (!String(model.kategori||"").trim()) { alert("Välj Kategori"); return; }
+        if (!String(model.beskrivning||"").trim()) { alert("Fyll i Beskrivning"); return; }
         const base = App.blankRow ? App.blankRow(k) : { id:null, fields:{}, meta:{} };
         base.fields = base.fields || {};
         base.meta = Object.assign({}, base.meta || {}, { owner: ownerKey, green: false });
@@ -1512,13 +1820,23 @@ function todoView(state, tabKey, title) {
           return;
         }
 
+
+        const field = (fields || []).find(x => String(x.name || "").trim() === n) || { name: n, type: "text", mods: {} };
+        const tkey = (App.FieldTypes && App.FieldTypes.normalizeType) ? App.FieldTypes.normalizeType(field.type) : String(field.type || "text");
+
+        const cellVal = ((r.fields && r.fields[n]) != null ? (r.fields && r.fields[n]) : "");
+        const overdue = (tkey === "date") && isOverdueDate(cellVal);
+
+
         const editor = (App.FieldTypes && typeof App.FieldTypes.renderEditor === "function")
           ? App.FieldTypes.renderEditor({
               baseType: tkey,
               mods: Object.assign({}, field.mods||{}, overdue ? { overdue:true } : {}),
               overdue,
-              value: (r.fields && r.fields[n]) ?? "",
+              value: ((r.fields && r.fields[n]) != null ? (r.fields && r.fields[n]) : ""),
               disabled: false,
+              notesHas: (field && field.mods && field.mods.notes) ? hasNotesInCell(r, n) : false,
+              onNotesClick: (field && field.mods && field.mods.notes) ? (() => addNoteToCell(tabKey, r.id, n)) : null,
               onChange: (val) => {
                 const st3 = App.getState();
                 const cur3 = getRowSafe(tabKey, r.id, st3) || r;
@@ -1527,9 +1845,9 @@ function todoView(state, tabKey, title) {
                 next3.fields[n] = v;
                 App.upsertRow(tabKey, next3);
               },
-              initialsValue: (r.fields && r.fields[initialsKeyFor(n)]) ?? "--",
+              initialsValue: ((r.fields && r.fields[initialsKeyFor(n)]) != null ? (r.fields && r.fields[initialsKeyFor(n)]) : "--"),
               onInitialsClick: (field.mods && field.mods.initials) ? () => {
-                const curIni = (r.fields && r.fields[initialsKeyFor(n)]) ?? "--";
+                const curIni = ((r.fields && r.fields[initialsKeyFor(n)]) != null ? (r.fields && r.fields[initialsKeyFor(n)]) : "--");
                 const pick = promptPickInitials(curIni);
                 if (pick === null) return;
                 const st4 = App.getState();
@@ -1547,15 +1865,17 @@ function todoView(state, tabKey, title) {
                   const cur5 = getRowSafe(tabKey, r.id, st5) || r;
                   const next5 = Object.assign({}, cur5, { updatedAt: new Date().toISOString(), fields: Object.assign({}, cur5.fields||{}) });
                   const log = readNotesLog(next5.fields, n);
-                  const add = promptAddNote(log);
-                  if (add === null) return;
-                  if (add) log.push({ ts: new Date().toISOString(), by: currentInitials(), text: add });
-                  writeNotesLog(next5.fields, n, log);
-                  App.upsertRow(tabKey, next5);
-                } catch (e) { console.warn(e); }
+                  const rowName = rowDisplayNameForNotes(tabKey, cur5, st5);
+                  openNotesModal(tabKey, n, log, function(add){
+                    if (!add) return;
+                    log.push({ ts: new Date().toISOString(), by: currentInitials(), text: add });
+                    writeNotesLog(next5.fields, n, log);
+                    App.upsertRow(tabKey, next5);
+                  });
+                  } catch (e) { console.warn(e); }
               } : undefined,
             })
-          : el("div", {}, [String((r.fields && r.fields[n]) ?? "")]);
+          : el("div", {}, [String(((r.fields && r.fields[n]) != null ? (r.fields && r.fields[n]) : ""))]);
 
         td.appendChild(editor);
         tr.appendChild(td);
@@ -1574,6 +1894,27 @@ function todoView(state, tabKey, title) {
         App.commitState(next);
       }}, ["Ta bort"]));
       tr.appendChild(tdDel);
+
+      // Right-click row toggles green highlight (ToDo)
+      try {
+        const isGreen = !!(r && r.meta && r.meta.green);
+        if (isGreen) tr.classList.add("row-green");
+        tr.addEventListener("contextmenu", function(e){
+          e.preventDefault();
+          const st = App.getState();
+          const list = Array.isArray(st.data && st.data[tabKey]) ? st.data[tabKey] : [];
+          const nextList = list.map(x => {
+            if (!x || x.id !== r.id) return x;
+            const meta = Object.assign({}, x.meta || {});
+            meta.green = !meta.green;
+            return Object.assign({}, x, { meta, updatedAt: new Date().toISOString() });
+          });
+          const next = (function(){ try { return JSON.parse(JSON.stringify(st)); } catch(e2) { return Object.assign({}, st); } })();
+          next.data = next.data || {};
+          next.data[tabKey] = nextList;
+          App.commitState(next);
+        });
+      } catch(e) {}
 
       tbody.appendChild(tr);
     });
@@ -1666,13 +2007,13 @@ function todoView(state, tabKey, title) {
     }
 
     function editNotes(fieldLabel, notesArrRefSetter, currentArr) {
-      const t = promptAddNote(currentArr || []);
-      if (t === null) return;
-      if (!t) return;
+      openNotesModal(tabKey, fieldLabel, (currentArr || []), function(t){
+        if (!t) return;
       const ts = new Date().toISOString();
       const entry = { ts, by: (acting && acting.initials) ? acting.initials : "", text: t };
       const next = (currentArr || []).concat([entry]);
       notesArrRefSetter(next);
+      });
     }
 
     function save() {
@@ -1940,15 +2281,17 @@ function todoView(state, tabKey, title) {
       if (!row) return;
       const fields = Object.assign({}, row.fields || {});
       const existing = readNotesLog(fields, fieldName);
-      const t = promptAddNote(existing);
-      if (t === null) return;
-      const nextLog = t ? (existing.concat([{ ts: new Date().toISOString(), by: (App.getActingUser ? (App.getActingUser(st).initials||"") : ""), text: t }])) : existing;
-      writeNotesLog(fields, fieldName, nextLog);
-      const nextRow = Object.assign({}, row, { fields, updatedAt: new Date().toISOString() });
-      App.upsertRow(tabKey, nextRow);
-    }
+      openNotesModal(tabKey, fieldName, existing, function(t){
+        if (!t) return;
+        const byIni = (App.getActingUser ? ((App.getActingUser(st).initials)||"") : "");
+        const nextLog = existing.concat([{ ts: new Date().toISOString(), by: byIni, text: t }]);
+        writeNotesLog(fields, fieldName, nextLog);
+        const nextRow = Object.assign({}, row, { fields, updatedAt: new Date().toISOString() });
+        App.upsertRow(tabKey, nextRow);
+      });
+      }
 
-    function notesHas(row, fieldName) {
+    function hasNotesInCell(row, fieldName) {
       const log = readNotesLog(row.fields || {}, fieldName);
       return log && log.length > 0;
     }
@@ -1980,6 +2323,8 @@ function todoView(state, tabKey, title) {
           type: f.type,
           value: value,
           mods: Object.assign({}, f.mods || {}),
+          notesHas: (f.mods && f.mods.notes) ? hasNotesInCell(r, f.name) : false,
+          onNotesClick: (f.mods && f.mods.notes) ? (() => addNoteToCell(tabKey, r.id, f.name)) : null,
           // initials addon (default --)
           initialsValue: iniVal,
           onInitialsClick: (f.mods && f.mods.initials) ? (() => {
@@ -1994,8 +2339,8 @@ function todoView(state, tabKey, title) {
             App.upsertRow(tabKey, nextRow);
           }) : null,
           // notes addon
-          notesHas: (f.mods && f.mods.notes) ? notesHas(r, n) : false,
-          onNotesClick: (f.mods && f.mods.notes) ? (() => onNotesClick(r.id, n)) : null,
+          notesHas: (f.mods && f.mods.notes) ? hasNotesInCell(r, n) : false,
+          onNotesClick: (f.mods && f.mods.notes) ? (() => addNoteToCell(tabKey, r.id, n)) : null,
           onChange: (nextVal) => {
             const st = App.getState();
             const cur = getRowSafe(tabKey, r.id, st) || r;
@@ -2050,7 +2395,7 @@ function todoView(state, tabKey, title) {
 
       const btnDel = el("button", { class: btnClass("danger"), type:"button", onclick: () => {
         if (!confirm("Ta bort raden?")) return;
-        App.archiveRow(tabKey, r.id);
+        App.deleteRow ? App.deleteRow(tabKey, r.id) : App.upsertRow(tabKey, null);
       }}, ["Ta bort"]);
 
       actionsTd.appendChild(btnDone);
@@ -2294,6 +2639,7 @@ function todoView(state, tabKey, title) {
     _routinesSchemaEnsured = false;
 
     const tab = App.getTab(state);
+try{ if(String(location.hostname)!=="planning.cappelendimyr.com") console.log("[ui tab debug] tab=", tab); }catch(e){}
     const role = App.role(state);
     const roleMode = (App.getRoleMode ? App.getRoleMode(state) : role);
 
@@ -2303,18 +2649,20 @@ function todoView(state, tabKey, title) {
       if (tab === App.Tabs.DEV) return adminSchemaView(state, App.Tabs.DEV, "Utveckling");
       if (tab === App.Tabs.PRODUCT) return adminSchemaView(state, App.Tabs.PRODUCT, "Sälj");
       if (tab === App.Tabs.TODO) return todoView(state, App.Tabs.TODO, "ToDo");
-    if (tab === App.Tabs.PROJECT) return projectView(state, App.Tabs.PROJECT, "Projekt");
-      if (tab === App.Tabs.PROJECT) return projectView(state, App.Tabs.PROJECT, "Projekt");
+    if (tab === App.Tabs.PROJECT || tab === "project") return projectView(state, App.Tabs.PROJECT || "project", "Projekt");
+      if (tab === App.Tabs.PROJECT || tab === "project") return projectView(state, App.Tabs.PROJECT || "project", "Projekt");
       if (tab === App.Tabs.ROUTINES) return userDataView(state, App.Tabs.ROUTINES, "Rutiner", { routinesEditable: true });
     }
 
     if (tab === App.Tabs.DEV) return userDataView(state, App.Tabs.DEV, "Utveckling");
     if (tab === App.Tabs.PRODUCT) return userDataView(state, App.Tabs.PRODUCT, "Sälj");
     if (tab === App.Tabs.TODO) return todoView(state, App.Tabs.TODO, "ToDo");
-    if (tab === App.Tabs.PROJECT) return projectView(state, App.Tabs.PROJECT, "Projekt");
+    if (tab === App.Tabs.PROJECT || tab === "project") return projectView(state, App.Tabs.PROJECT || "project", "Projekt");
     if (tab === App.Tabs.ROUTINES) return userDataView(state, App.Tabs.ROUTINES, "Rutiner");
 
     return todoView(state, App.Tabs.TODO, "ToDo");
   };
 
 })();
+
+    function promptAddNote(){ return null; }

@@ -1516,69 +1516,538 @@ td .act-field.act-type-text .act-value-input{ width: 100%; }
 }
 
 
-.usp-modal-overlay{
-  position:fixed; inset:0; z-index:9999;
-  display:flex; align-items:center; justify-content:center;
-}
-.usp-modal-backdrop{
-  position:absolute; inset:0;
-  background:rgba(0,0,0,0.35);
-}
-.usp-modal{
-  position:relative;
-  background:#fff;
-  width:min(640px, calc(100vw - 32px));
-  border-radius:16px;
-  box-shadow:0 10px 40px rgba(0,0,0,0.25);
-  padding:18px 18px 14px;
-}
-.usp-modal-head{ margin-bottom:14px; }
-.usp-modal-title{ font-size:24px; font-weight:700; }
-.usp-modal-subtitle{ font-size:13px; opacity:0.75; margin-top:2px; }
-.usp-modal-fields{ display:grid; grid-template-columns: 1fr; gap:12px; }
-.usp-modal-field{ display:grid; grid-template-columns: 110px 1fr; gap:10px; align-items:center; }
-.usp-modal-label{ font-weight:600; opacity:0.9; }
-.usp-modal-input{
-  width:100%;
-  padding:8px 10px;
-  border:1px solid rgba(0,0,0,0.18);
-  border-radius:10px;
-  font-size:14px;
-}
-.usp-modal-date{ width:15ch; }
-.usp-modal-descwrap{ display:flex; align-items:center; gap:10px; }
-.usp-modal-actions{ display:flex; justify-content:flex-end; gap:10px; margin-top:16px; }
+/* ===============================
+   USP UI THEME OVERRIDES v232
+   - Background + active tab color
+   - Smaller corner markers (-30%)
+   - Initials as round ring + smaller font
+   =============================== */
 
+:root{
+  /* Light theme palette from design sample */
+  --bg:#fbf7df;          /* warm pale background */
+  --text:#0f172a;        /* slate text */
+  --muted:#475569;
+  --line:rgba(15,23,42,.12);
+  --card:rgba(255,255,255,.75);
+  --card2:rgba(255,255,255,.85);
 
-.todo-overdue .act-date-display,
-.todo-overdue .act-date-picker{
-  border:3px solid #cc0000 !important;
+  /* "Vy färg" (active view) */
+  --accent:#b89a6b;      /* sand */
+  --accent2:#c7ae85;     /* lighter sand */
 }
 
-
-/* === VERSION 229: Initialer mörkblå när notes finns === */
-.act-initials.is-notes{
-  color:#0b3d91 !important;
+/* Page background */
+body{
+  background: var(--bg) !important;
+  color: var(--text) !important;
 }
 
+/* Topbar container */
+.topbar{
+  background: transparent !important;
+  border-bottom: 1px solid rgba(15,23,42,.10) !important;
+}
 
-/* === VERSION 230: Initialer som ring (grå), mörkblå tjock ring om notes finns === */
+/* Tabs group */
+.tabs{
+  background: rgba(255,255,255,.55) !important;
+  border: 1px solid rgba(15,23,42,.10) !important;
+}
+
+/* Tab buttons */
+.tab{
+  color: rgba(15,23,42,.72) !important;
+}
+
+/* Active tab */
+.tab.is-active{
+  background: var(--accent) !important;
+  color: #111827 !important;
+}
+
+/* ---- Corner markers: -30% ---- */
+.act-status-corner{
+  width: 13px !important;
+  height: 13px !important;
+  top: -6px !important;
+  left: -6px !important;
+  border-width: 2px !important;
+}
+
+/* ---- Initials ring ---- */
 .act-initials{
-  display:inline-flex;
-  align-items:center;
-  justify-content:center;
-  width:22px;
-  height:22px;
-  border-radius:50%;
-  border:1.5px solid rgba(0,0,0,0.35);
-  background:transparent;
-  padding:0;
-  font-size:11px;
-  line-height:1;
-  font-weight:600;
+  width: 24px;
+  height: 24px;
+  min-width: 24px;
+  border-radius: 999px;
+  border: 1px solid rgba(15,23,42,.28);
+  background: transparent;
+  color: rgba(15,23,42,.78);
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  cursor: pointer;
 }
 
+/* Dark blue ring when notes exist */
 .act-initials.is-notes{
-  border:3px solid #0b3d91 !important;
-  color:#0b3d91 !important;
+  border: 2px solid #0b3d91;
+  color: #0b3d91;
 }
+
+/* Keep notes icon rules from v231, but ensure color works on light bg */
+.note-icon{
+  color: rgba(15,23,42,.55);
+}
+.note-icon.is-notes{
+  color: #0b3d91 !important;
+}
+
+
+
+/* ===============================
+   USP UI TWEAKS v233
+   - Remove any remaining note button rectangle
+   - Smaller font for produktkategori display
+   - Smaller buttons (Done/Ta bort etc)
+   - Green row highlight for ToDo (right-click)
+   =============================== */
+
+/* Notes icon: enforce icon-only styling everywhere */
+button.note-icon,
+.act-field button.note-icon,
+td button.note-icon{
+  border: none !important;
+  background: transparent !important;
+  padding: 0 6px !important;
+  margin: 0 !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+  min-width: auto !important;
+  height: auto !important;
+  line-height: 1 !important;
+}
+
+/* Produktkategori: smaller presentation (and other dropdowns keep readable) */
+.act-field select.act-value-input{
+  font-size: 0.85em;
+}
+
+/* Buttons: smaller padding + font */
+button.btn,
+.btn{
+  font-size: 0.86em !important;
+  padding: 6px 12px !important;
+}
+button.btn.btn-small,
+.btn.btn-small{
+  font-size: 0.82em !important;
+  padding: 4px 10px !important;
+}
+/* some buttons are plain without .btn class */
+table button[type="button"]{
+  font-size: 0.86em;
+}
+
+/* ToDo green row highlight */
+tr.row-green td{
+  background: rgba(34, 197, 94, 0.18) !important;
+}
+
+
+
+/* ===============================
+   USP TABLE + NOTES TWEAKS v234
+   - Slightly darker row separators
+   - Light gray header rows
+   - Notes: blue ring indicator when notes exist
+   =============================== */
+
+/* Darker separators between rows (all tables) */
+table th, table td{
+  border-bottom-color: rgba(15,23,42,.18) !important;
+}
+
+/* Header row a bit gray */
+table thead th{
+  background: rgba(15,23,42,.04) !important;
+}
+
+/* Notes indicator: add blue ring overlay (top-right) when notes exist */
+.note-icon{
+  position: relative !important;
+  display: inline-flex !important;
+  align-items: center;
+  justify-content: center;
+}
+.note-icon.is-notes::after{
+  content: "";
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  border: 2px solid #0b3d91;
+  background: transparent;
+}
+
+
+
+/* ===============================
+   USP UI TWEAKS v235
+   - Darker row separators
+   - Light gray header row
+   - Notes indicator: small filled blue dot overlapping icon
+   - ToDo green rows
+   =============================== */
+
+/* Darker separators for all tables */
+table.table th,
+table.table td{
+  border-bottom: 1px solid rgba(15,23,42,.20) !important;
+}
+
+/* Light gray header row */
+table.table thead th{
+  background: rgba(15,23,42,.04) !important;
+}
+
+/* Notes icon: show small filled blue dot when notes exist */
+.note-icon{
+  position: relative;
+}
+.note-icon.is-notes::after{
+  content: "";
+  position: absolute;
+  right: -2px;
+  top: -2px;
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: #0b3d91;
+}
+
+/* Green row highlight (ToDo right-click toggle) */
+tr.row-green td{
+  background: rgba(34, 197, 94, 0.18) !important;
+}
+
+
+
+/* ===============================
+   USP UI TWEAKS v236
+   - Table title bars use page background
+   - Buttons light gray like table headers
+   - Notes dot: almost fully overlapping + lighter blue
+   =============================== */
+
+/* "Tabellrubrikrader" (the bar with table title/top controls) */
+.table-title,
+.table-header,
+.view-header,
+.section-header{
+  background: var(--bg) !important;
+}
+
+/* Buttons: light gray like header */
+button.btn,
+.btn,
+.topbar button,
+.topbar .tab,
+.actions button,
+table button{
+  background: rgba(15,23,42,.04) !important;
+  border: 1px solid rgba(15,23,42,.12) !important;
+  color: rgba(15,23,42,.85) !important;
+}
+button.btn:hover,
+.btn:hover,
+table button:hover{
+  background: rgba(15,23,42,.07) !important;
+}
+
+/* Notes dot: lighter blue, almost fully overlapping */
+.note-icon.is-notes::after{
+  right: 1px !important;
+  top: 1px !important;
+  width: 6px !important;
+  height: 6px !important;
+  background: #3b82f6 !important; /* lighter blue */
+}
+
+
+
+/* ===============================
+   USP UI TWEAKS v237
+   - Make view title bar same as page background
+   =============================== */
+
+/* This is the level shown in the screenshot (Utveckling header row) */
+.view-hero,
+.page-hero,
+.view-header,
+.content-header,
+.section-header{
+  background: var(--bg) !important;
+  box-shadow: none !important;
+}
+
+
+
+/* ===============================
+   USP UI FIX v238
+   - Restore active tab "vy-färg"
+   - Keep view hero bar on page background
+   - Notes dot fully overlapping
+   - Smaller button text
+   =============================== */
+
+/* Restore active tab highlight */
+.tab{
+  background: transparent !important;
+  border: none !important;
+}
+.tab.is-active{
+  background: var(--accent) !important;
+  border: 1px solid rgba(15,23,42,.12) !important;
+  color: #111827 !important;
+}
+
+/* Ensure view hero/title row always matches page background */
+.view-hero,
+.page-hero,
+.view-header,
+.content-header,
+.section-header{
+  background: var(--bg) !important;
+}
+
+/* Buttons: keep light gray but DO NOT override tabs */
+button.btn,
+.btn,
+.actions button,
+table button{
+  background: rgba(15,23,42,.04) !important;
+  border: 1px solid rgba(15,23,42,.12) !important;
+  color: rgba(15,23,42,.85) !important;
+}
+
+/* Smaller button text everywhere */
+button,
+.btn{
+  font-size: 0.82em !important;
+}
+
+/* Notes dot: fully overlapping and lighter blue */
+.note-icon.is-notes::after{
+  right: 2px !important;
+  top: 2px !important;
+  width: 6px !important;
+  height: 6px !important;
+  background: #60a5fa !important; /* lighter blue */
+}
+
+
+
+/* ===============================
+   USP UI FIX v239
+   - Make main view title row (e.g. "Sälj") same as page background
+   =============================== */
+
+/* This is the white content wrapper under topbar */
+.view-wrapper,
+.view-container,
+.main-view,
+.content-wrapper{
+  background: var(--bg) !important;
+}
+
+/* Specifically target the title row that contains the H1 like 'Sälj' */
+.view-wrapper > div:first-child,
+.main-view > div:first-child{
+  background: var(--bg) !important;
+  box-shadow: none !important;
+}
+
+
+
+/* ===============================
+   USP UI TWEAKS v240
+   - Smaller initials font
+   - Notes dot fully overlapping + lighter blue
+   - Main view container uses page background
+   - Tighter table rows
+   =============================== */
+
+/* Initials: smaller text */
+.act-initials{
+  font-size: 9px !important;
+  font-weight: 700 !important;
+}
+
+/* Notes indicator: fully overlapping (small filled dot) */
+.note-icon.is-notes::after{
+  right: 3px !important;
+  top: 3px !important;
+  width: 6px !important;
+  height: 6px !important;
+  background: #7fb2ff !important; /* lighter blue */
+}
+
+/* Main view container background */
+.view-wrapper,
+.view-container,
+.main-view,
+.content-wrapper{
+  background: var(--bg) !important;
+}
+
+/* Tighter table rows */
+table.table th,
+table.table td{
+  padding-top: 8px !important;
+  padding-bottom: 8px !important;
+}
+
+/* Tighter inputs inside tables */
+table.table input,
+table.table select,
+table.table textarea{
+  padding-top: 8px !important;
+  padding-bottom: 8px !important;
+}
+
+
+
+/* ===============================
+   USP UI TWEAKS v241
+   - Taller dropdowns in DEV/PRODUCT tables
+   - Force main view container to page background (stronger selectors)
+   =============================== */
+
+/* Taller dropdowns (Dev/Product tables) */
+table.table select{
+  height: 44px !important;
+  padding-top: 10px !important;
+  padding-bottom: 10px !important;
+}
+
+/* Force the big white view panel to match background */
+.main,
+#app,
+#root,
+.app,
+.app-shell,
+.content,
+.content-area,
+.view,
+.view-wrapper,
+.view-container,
+.main-view,
+.content-wrapper,
+.panel,
+.card,
+.sheet{
+  background: var(--bg) !important;
+}
+
+
+
+/* ===============================
+   USP UI FIX v242
+   - Force main inner panel (white area) to use page background
+   - Proper centered modal with border/frame (Notes + Initials)
+   =============================== */
+
+/* Stronger: the big inner panel that was still white */
+.view-panel,
+.view-surface,
+.page-surface,
+.inner,
+.inner-wrap,
+.container,
+.container-fluid,
+.content-panel,
+.content-surface,
+.main-surface,
+.sheet,
+.card,
+.panel{
+  background: var(--bg) !important;
+}
+
+/* If the white area is a direct child wrapper, catch common patterns */
+#app > .container,
+#app > .inner,
+#app > .content,
+#app > .view,
+#app > .view-wrapper,
+#app > .main-view,
+#root > .container,
+#root > .inner,
+#root > .content,
+#root > .view,
+#root > .view-wrapper,
+#root > .main-view{
+  background: var(--bg) !important;
+}
+
+/* Centered modal overlay */
+.usp-modal-overlay{
+  position: fixed !important;
+  inset: 0 !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  background: rgba(15, 23, 42, 0.18) !important;
+  z-index: 9999 !important;
+  padding: 24px !important;
+}
+
+/* Modal frame */
+.usp-modal{
+  background: #fff !important;
+  border: 1px solid rgba(15,23,42,.18) !important;
+  border-radius: 14px !important;
+  box-shadow: 0 20px 50px rgba(15,23,42,.18) !important;
+  padding: 16px 16px 12px !important;
+  max-width: 720px !important;
+  width: min(720px, 92vw) !important;
+}
+
+/* Modal title */
+.usp-modal .modal-title{
+  font-size: 18px !important;
+  font-weight: 800 !important;
+  margin-bottom: 10px !important;
+}
+
+/* Notes textarea bigger + full width */
+.usp-modal textarea.modal-textarea{
+  width: 100% !important;
+  min-height: 120px !important; /* ~5 rows */
+  resize: vertical !important;
+}
+
+/* Modal actions align right */
+.usp-modal .modal-actions{
+  display: flex !important;
+  gap: 10px !important;
+  justify-content: flex-end !important;
+  margin-top: 12px !important;
+}
+
+
+
+/* === USP patch v243: inner panel uses page background === */
+.table-wrap,
+#usp-view{
+  background: var(--bg, inherit) !important;
+}
+

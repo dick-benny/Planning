@@ -1,4 +1,5 @@
-/* app_01_bootstrap_71.js
+// [bootstrap v72]
+/* app_01_bootstrap_69.js
    USP restart architecture (role-first, tab-first)
    - No import/export
    - Single source of truth: state.ui.tab + App.role(state)
@@ -20,13 +21,14 @@
   USP.Env = USP.Env || {};
   App.VERSION = 76;
 
+  // Data mode: "local" on localhost, "supabase" on planning.cappelendimyr.com (or any non-local host)
+  App.getDataMode = function getDataMode() {
+    return (App.Config && App.Config.dataMode) ? App.Config.dataMode() : "local";
+  };
+
   // Storage keys
   const LS_STATE = "usp_state_latest_v2";
   const LS_USER = "usp_user_v1";
-
-  function getDataMode(){
-    try { return (App.Config && App.Config.getDataMode) ? App.Config.getDataMode() : "local"; } catch(e){ return "local"; }
-  }
 
   // ---------------------------
   // Utilities
@@ -216,7 +218,22 @@
     };
   }
 
-  function defaultState() {
+  
+  // VERSION 74: Ensure hardcoded registries are present in state.settings.registries
+  function ensureRegistries(st) {
+    st = st || {};
+    st.settings = st.settings || {};
+    st.settings.registries = st.settings.registries || {};
+    const defs = (App.Config && App.Config.DEFAULT_REGISTRIES) ? App.Config.DEFAULT_REGISTRIES : null;
+    if (defs) {
+      Object.keys(defs).forEach((k) => {
+        if (!Array.isArray(st.settings.registries[k])) st.settings.registries[k] = defs[k].slice();
+      });
+    }
+    return ensureRegistries(st);
+  }
+
+function defaultState() {
     return {
       _v: App.VERSION,
       updatedAt: nowIso(),
@@ -239,9 +256,7 @@
 
     const SEL = "usp_selected_user_id";
     let sel = "";
-    if (getDataMode() === "local") {
-      try { sel = String(localStorage.getItem(SEL) || ""); } catch (e) { sel = ""; }
-    }
+    try { if (!(App.getDataMode && App.getDataMode() === "supabase")) sel = String((App.getDataMode && App.getDataMode()==="supabase" ? null : localStorage.getItem)(SEL) || ""); } catch (e) { sel = ""; }
 
     let user = null;
     if (sel) user = dir.find(u => u && String(u.id) === sel) || null;
@@ -249,7 +264,7 @@
 
     if (!user) user = { id: uid("u"), email: "d.eriksson@cappelendimyr.com", name: "Dick Eriksson", createdAt: nowIso() };
 
-    if (getDataMode() === "local") { try { localStorage.setItem(SEL, String(user.id)); } catch (e) {} }
+    try { if (!(App.getDataMode && App.getDataMode() === "supabase")) localStorage.setItem(SEL, String(user.id)); } catch (e) {}
     return user;
   }
 
@@ -324,26 +339,17 @@
   App.getState = function getState() { return _state; };
 
   function persistState(st) {
-    const m = getDataMode();
-    if (m === "local") {
-      try { localStorage.setItem(LS_STATE, JSON.stringify(st)); } catch (e) {}
-      return;
-    }
-    // Supabase mode: never persist app data to localStorage
-    try {
-      if (App.DB && typeof App.DB.saveState === "function") {
-        App.DB.saveState(st).catch(function (e) { console.warn("DB.saveState failed", e); });
-      }
-    } catch (e) { console.warn("persistState supabase failed", e); }
+    try { if (!(App.getDataMode && App.getDataMode()==="supabase")) localStorage.setItem(LS_STATE, JSON.stringify(st)); } catch (e) {}
   }
 
   function loadState() {
-    const m = getDataMode();
-    if (m !== "local") {
-      // Supabase mode: start from default; remote hydration happens after UI mount.
-      return defaultState();
+    if (App.getDataMode && App.getDataMode() === "supabase") {
+      // Remote load is async; start with defaults and then merge remote payload during init.
+      const st = defaultState();
+      st._v = App.VERSION;
+      return st;
     }
-    const raw = localStorage.getItem(LS_STATE);
+    const raw = (App.getDataMode && App.getDataMode()==="supabase") ? null : localStorage.getItem(LS_STATE);
     const st = safeJsonParse(raw, null);
     if (!st || typeof st !== "object") return defaultState();
 
@@ -588,7 +594,7 @@
     st.session.authUser = next;
     st.session.roleMode = (App.isAdminUser(next) ? "admin" : "user");
 // Keep local selection (UI state)
-    try { localStorage.setItem("usp_selected_user_id", String(next.id)); } catch (e) {}
+    try { if (!(App.getDataMode && App.getDataMode()==="supabase")) localStorage.setItem("usp_selected_user_id", String(next.id)); } catch (e) {}
 
     // Also switch "logged in" user for the local auth shim (so USP.Auth.currentUser() changes)
     try {
@@ -605,7 +611,7 @@ App.listUsers = function listUsers(state) {
   };
 
   App.getCurrentUserId = function getCurrentUserId() {
-    try { return String(localStorage.getItem("usp_selected_user_id") || ""); } catch (e) { return ""; }
+    try { return String((App.getDataMode && App.getDataMode()==="supabase" ? null : localStorage.getItem)("usp_selected_user_id") || ""); } catch (e) { return ""; }
   };
 
   App.setCurrentUser = function setCurrentUser(userId) {
@@ -617,7 +623,7 @@ App.listUsers = function listUsers(state) {
     if (!st.session.roleMode) st.session.roleMode = "admin";
     st.session.actingUserId = String(u.id);
     st.user = u;
-    try { localStorage.setItem("usp_selected_user_id", String(u.id)); } catch (e) {}
+    try { if (!(App.getDataMode && App.getDataMode()==="supabase")) localStorage.setItem("usp_selected_user_id", String(u.id)); } catch (e) {}
     return App.commitState(st);
   };
 
@@ -686,26 +692,6 @@ App.listUsers = function listUsers(state) {
     // First render
     if (USP.UI && typeof USP.UI.render === "function") {
       USP.UI.render(_state);
-
-    // Supabase mode: hydrate state from DB after first paint
-    try {
-      if (getDataMode() !== "local" && App.DB && typeof App.DB.loadState === "function") {
-        App.DB.loadState().then(function (remote) {
-          if (!remote || typeof remote !== "object") return;
-          // Merge remote into current state (keep session/auth from local init)
-          const cur = App.getState();
-          const merged = deepClone(cur);
-          if (remote.schemas) merged.schemas = remote.schemas;
-          if (remote.data) merged.data = remote.data;
-          if (remote.settings) merged.settings = remote.settings;
-          merged.updatedAt = remote.updatedAt || merged.updatedAt || nowIso();
-          App.commitState(merged);
-        }).catch(function (e) {
-          console.warn("DB.loadState failed", e);
-        });
-      }
-    } catch (e) { console.warn("hydrateFromRemote setup failed", e); }
-
     }
 
     return _state;
@@ -717,26 +703,6 @@ App.listUsers = function listUsers(state) {
     _state = ensureStateInvariants(defaultState());
     persistState(_state);
     if (USP.UI && typeof USP.UI.render === "function") USP.UI.render(_state);
-
-    // Supabase mode: hydrate state from DB after first paint
-    try {
-      if (getDataMode() !== "local" && App.DB && typeof App.DB.loadState === "function") {
-        App.DB.loadState().then(function (remote) {
-          if (!remote || typeof remote !== "object") return;
-          // Merge remote into current state (keep session/auth from local init)
-          const cur = App.getState();
-          const merged = deepClone(cur);
-          if (remote.schemas) merged.schemas = remote.schemas;
-          if (remote.data) merged.data = remote.data;
-          if (remote.settings) merged.settings = remote.settings;
-          merged.updatedAt = remote.updatedAt || merged.updatedAt || nowIso();
-          App.commitState(merged);
-        }).catch(function (e) {
-          console.warn("DB.loadState failed", e);
-        });
-      }
-    } catch (e) { console.warn("hydrateFromRemote setup failed", e); }
-
   };
 
 })();
