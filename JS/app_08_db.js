@@ -38,25 +38,67 @@
 
   App.DB.saveState = async function saveState(state) {
     if (mode() !== "server") return { ok: true, skipped: true };
-    
+
+    // Coalesce rapid saves and send them in order.
+    // Without this, multiple overlapping POSTs can race and an older state can land last.
+    App.DB.__saveQueue = App.DB.__saveQueue || {
+      inFlight: false,
+      pendingState: null,
+      pendingPromise: null,
+      lastResult: null
+    };
+
+    const q = App.DB.__saveQueue;
     try {
-      console.log("💾 Saving state to /api/state...", state);
-      const res = await fetch("/api/state", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ state })
-      });
-      
-      if (!res.ok) {
-        const text = await res.text();
-        throw new Error("Failed to save state: " + res.status + " " + text);
+      // Deep-clone snapshot to avoid later mutation while queued
+      q.pendingState = JSON.parse(JSON.stringify(state));
+
+      if (q.inFlight && q.pendingPromise) {
+        return q.pendingPromise;
       }
-      
-      const result = await res.json();
-      console.log("💾 Saved state:", result);
-      return { ok: true, updated_at: result.updated_at };
+
+      q.inFlight = true;
+      q.pendingPromise = (async function flushQueue() {
+        let result = { ok: true, skipped: true };
+        while (q.pendingState) {
+          const snapshot = q.pendingState;
+          q.pendingState = null;
+
+          try {
+            console.log("💾 Saving state to /api/state...", snapshot);
+            const res = await fetch("/api/state", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ state: snapshot })
+            });
+
+            if (!res.ok) {
+              const text = await res.text();
+              throw new Error("Failed to save state: " + res.status + " " + text);
+            }
+
+            const payload = await res.json();
+            result = { ok: true, updated_at: payload.updated_at };
+            q.lastResult = result;
+            console.log("💾 Saved state:", payload);
+          } catch (err) {
+            console.error("DB saveState error:", err);
+            q.inFlight = false;
+            q.pendingPromise = null;
+            throw err;
+          }
+        }
+
+        q.inFlight = false;
+        q.pendingPromise = null;
+        return result;
+      })();
+
+      return q.pendingPromise;
     } catch (err) {
       console.error("DB saveState error:", err);
+      q.inFlight = false;
+      q.pendingPromise = null;
       throw err;
     }
   };

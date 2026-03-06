@@ -2412,3 +2412,34 @@ button.btn-mine-active:hover,
 .btn.btn-mine-active:hover,
 .pill.btn-mine-active:hover,
 .btn-mine-active:hover{ filter: brightness(1.05); }
+
+
+
+/* ===== Column width optimisation (auto expand across screen) ===== */
+.table{
+  width:100%;
+  table-layout:auto;
+}
+
+.table thead th,
+.table tbody td{
+  width:auto;
+}
+
+.table thead th{
+  white-space:nowrap;
+}
+
+.table tbody td{
+  white-space:normal;
+}
+
+/* allow action cells to grow nicely */
+.act-field{
+  width:100%;
+}
+
+/* keep utility columns fixed */
+.table .col-check{ width:40px; }
+.table .col-expand{ width:44px; }
+/* ================================================================ */
