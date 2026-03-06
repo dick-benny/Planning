@@ -1,4 +1,19 @@
-// [ui v237]
+
+  function computeInitials(u){
+    try{
+      if (!u) return "";
+      const v = String(u.initials || u.short || u.abbr || "").trim();
+      if (v) return v;
+      const name = String(u.name || u.fullName || u.email || "").trim();
+      if (!name) return "";
+      const parts = name.split(/\s+/).filter(Boolean);
+      const a = (parts[0] || "").charAt(0);
+      const b = (parts.length > 1 ? parts[parts.length-1].charAt(0) : "");
+      return (a + b).toUpperCase();
+    }catch(e){ return ""; }
+  }
+
+// [ui v238]
 /* app_04_ui_92.js
    USP UI (design-restored via style.css classes)
    - Keeps v60+ deterministic router: tab + role -> view
@@ -12,6 +27,315 @@
   const USP = window.USP;
   const UI = (USP.UI = USP.UI || {});
 
+  // USP debug v14: Robust event tracing with visual indicator.
+  // Enable: localStorage.USP_DEBUG_EVENTS="1" then reload.
+  (function installUspEventDebugV14(){
+    if (window.__uspEventDebugV14Installed) return;
+    window.__uspEventDebugV14Installed = true;
+
+    function isOn(){
+      try { return String(localStorage.getItem("USP_DEBUG_EVENTS")||"") === "1"; } catch(e) { return false; }
+    }
+
+    const on = isOn();
+    if (on) {
+      console.log("[USP debug v14] enabled (USP_DEBUG_EVENTS=1)");
+      try{
+        const badge = document.createElement("div");
+        badge.textContent = "USP DEBUG ON";
+        badge.style.position = "fixed";
+        badge.style.right = "8px";
+        badge.style.bottom = "8px";
+        badge.style.zIndex = "999999";
+        badge.style.padding = "4px 8px";
+        badge.style.font = "12px/1.2 sans-serif";
+        badge.style.background = "rgba(0,0,0,0.75)";
+        badge.style.color = "#fff";
+        badge.style.borderRadius = "6px";
+        badge.style.pointerEvents = "none";
+        document.addEventListener("DOMContentLoaded", function(){
+          document.body.appendChild(badge);
+        });
+      }catch(e){}
+    }
+
+    function shortEl(el){
+      if (!el) return "(null)";
+      const tag = (el.tagName||"").toLowerCase();
+      const id = el.id ? ("#" + el.id) : "";
+      const cls = (el.className && typeof el.className === "string") ? ("." + el.className.trim().split(/\s+/).slice(0,5).join(".")) : "";
+      return tag + id + cls;
+    }
+
+    function chain(el, limit){
+      const out = [];
+      let cur = el;
+      for (let i=0;i<(limit||10) && cur;i++){
+        out.push(shortEl(cur));
+        cur = cur.parentElement;
+      }
+      return out.join(" <- ");
+    }
+
+    function log(phase, e){
+      if (!on) return;
+      try{
+        const t = e && e.target;
+        const ini = (t && t.closest) ? t.closest(".act-initials, [data-usp-initials='1']") : null;
+        const note = (t && t.closest) ? t.closest(".act-notes, [data-usp-notes='1']") : null;
+        console.log("[USP debug v14]", {
+          phase,
+          type: e && e.type,
+          button: e && e.button,
+          defaultPrevented: !!(e && e.defaultPrevented),
+          target: shortEl(t),
+          chain: chain(t, 10),
+          hasClosestInitials: !!ini,
+          closestInitials: shortEl(ini),
+          hasClosestNotes: !!note,
+          closestNotes: shortEl(note),
+          closestButton: (t && t.closest) ? shortEl(t.closest("button")) : "(no closest)",
+          actionButton: (t && t.closest) ? shortEl(t.closest("button[data-action]")) : "(none)",
+          actionId: (t && t.closest && t.closest("button[data-action]")) ? String(t.closest("button[data-action]").getAttribute("data-action")||"") : "",
+          tabAttr: (t && t.closest && t.closest("button[data-action]")) ? String(t.closest("button[data-action]").getAttribute("data-tab")||"") : "",
+          tab: (App && typeof App.getTab === "function") ? App.getTab() : "(no App.getTab)",
+          time: new Date().toISOString()
+        });
+      }catch(err){
+        console.log("[USP debug v14] error", err);
+      }
+    }
+
+    const opts = { capture:true, passive:false };
+    document.addEventListener("contextmenu", function(e){ log("contextmenu(capture)", e); }, opts);
+    document.addEventListener("mousedown", function(e){
+      if (!e) return;
+      if (e.button === 2) log("mousedown-right(capture)", e);
+    }, opts);
+    document.addEventListener("click", function(e){ log("click(capture)", e); }, opts);
+  })();
+
+
+  // USP fix v13: Suppress browser context menu on initials and on USP modals (capture phase).
+  // This removes the native browser menu that was still appearing in Dev/Project/ToDo.
+  (function installUspContextSuppress(){
+    if (window.__uspCtxSuppressInstalled) return;
+    window.__uspCtxSuppressInstalled = true;
+
+    function suppressIfMatches(e){
+      try{
+        const t = e && e.target;
+        if (!t) return false;
+
+        // 1) If a USP modal overlay is present and user right-clicks it, suppress browser menu.
+        const overlay = (t && t.closest) ? t.closest(".usp-modal-overlay") : null;
+        if (overlay) {
+          e.preventDefault();
+          e.stopImmediatePropagation();
+          e.stopPropagation();
+          return true;
+        }
+
+        // 2) Suppress on initials ring/button
+        const ini = (t && t.closest) ? t.closest(".act-initials, [data-usp-initials='1'], [data-usp-initials]") : null;
+        if (ini) {
+          e.preventDefault();
+          e.stopImmediatePropagation();
+          e.stopPropagation();
+          // Prefer explicit handler attached by FieldTypes
+          const fn = ini.__uspNotesClick;
+          if (typeof fn === "function") {
+            try{ fn(e); }catch(err){}
+          }
+          return true;
+        }
+      }catch(err){}
+      return false;
+    }
+
+    document.addEventListener("contextmenu", suppressIfMatches, { capture:true, passive:false });
+  })();
+
+
+// ------------------------
+// R4A: TabSpec registry (no behavior change yet)
+// Central place to describe per-tab UI/actions/modals. Used in later steps (R4B/R4C).
+// NOTE: This step only introduces the registry + helpers; existing rendering remains unchanged.
+// ------------------------
+if (!USP.UI) USP.UI = {};
+USP.UI.TabSpec = USP.UI.TabSpec || (function(){
+  // Keys must match App.getTab() values (lowercase)
+  return {
+    dev: {
+      key: "dev",
+      label: "Utveckling",
+      newRow: { action: "new_row", buttonText: "+ Ny Utveckling", modal: { fields: ["Produktidé","Kategori","Syfte"] } }
+    },
+    product: {
+      key: "product",
+      label: "Sälj",
+      newRow: { action: "new_row", buttonText: "+ Ny Produkt", modal: { fields: ["Produkt","Kategori"] } }
+    },
+    project: {
+      key: "project",
+      label: "Projekt",
+      newRow: { action: "new_row", buttonText: "+ Nytt projekt", modal: { fields: ["Projektnamn","Kategori"] } }
+    },
+    todo: {
+      key: "todo",
+      label: "ToDo",
+      newRow: { action: "new_row", buttonText: "+ Ny ToDo", modal: { fields: ["Kategori","Beskrivning"] } }
+    },
+    routines: {
+      key: "routines",
+      label: "Rutiner"
+      // intentionally no newRow in R4A
+    }
+  };
+})();
+
+USP.UI.getTabSpec = function(tabKey){
+  try{
+    const k = String(tabKey || "").toLowerCase();
+    return (USP.UI.TabSpec && USP.UI.TabSpec[k]) ? USP.UI.TabSpec[k] : null;
+  }catch(e){ return null; }
+};
+
+
+
+// R4C: Central tab action dispatcher
+USP.UI.dispatchTabAction = function(tabKey, actionId, state){
+  try{
+    const spec = USP.UI.getTabSpec(tabKey);
+    if (!spec) return false;
+
+    if (actionId === "new_row" && spec.newRow && spec.newRow.modal) {
+      const wanted = (spec.newRow.modal.fields || []).slice();
+      const title = (spec.newRow.buttonText || "Ny rad").replace(/^\+\s*/,"").trim();
+
+      // Resolve requested field names against schema; if none match, fall back to full form so modal still opens.
+      let onlyFields = wanted;
+      try{
+        const schema = (USP.App && typeof USP.App.getSchema === "function") ? USP.App.getSchema(tabKey)
+                      : ((App && typeof App.getSchema === "function") ? App.getSchema(tabKey) : null);
+        const fieldsAll = (schema && Array.isArray(schema.fields)) ? schema.fields : [];
+        const matched = wanted.map(n => fieldsAll.find(f => String(f.name||"").trim() === String(n).trim())).filter(Boolean);
+        if (matched.length === 0) onlyFields = null;
+      }catch(_){}
+
+      const opts = { title, onlyFields };
+      if (String(tabKey).toLowerCase() === "todo") opts.todoNew = true;
+
+      const orm = (USP.App && typeof USP.App.openRowModal === "function") ? USP.App.openRowModal : ((USP.UI && typeof USP.UI.openRowModal === "function") ? USP.UI.openRowModal : ((typeof openRowModal === "function") ? openRowModal : (typeof window.openRowModal === "function" ? window.openRowModal : null)));
+      if (orm) {
+        try{
+          orm(tabKey, opts);
+          return true;
+        }catch(err){
+          try{ console.error("[ui] openRowModal threw", err); }catch(e){}
+        }
+      } else {
+        try{ console.warn("[ui] openRowModal function not found", { tabKey, actionId, hasUSPApp: !!(USP&&USP.App), hasUSPUi: !!(USP&&USP.UI), winHas: (typeof window.openRowModal==="function") }); }catch(e){}
+      }
+    }
+  }catch(e){
+  }
+  return false;
+};
+
+// R4C: Listen for data-action clicks and dispatch
+(function installTabActionRouter(){
+  if (window.__uspTabActionRouterInstalled) return;
+  window.__uspTabActionRouterInstalled = true;
+
+  document.addEventListener("click", function(e){
+    try{
+      const t = e && e.target;
+      if (!t || !t.closest) return;
+
+      // Ignore inside modal
+      if (t.closest(".usp-modal-overlay") || t.closest(".usp-modal")) return;
+
+      const btn = t.closest('button[data-action]');
+      if (!btn) return;
+      const actionId = String(btn.getAttribute("data-action") || "");
+      if (!actionId) return;
+
+      const tabAttr = btn.getAttribute("data-tab");
+      const tabKey = tabAttr ? String(tabAttr) : ((App && typeof App.getTab === "function") ? App.getTab() : "");
+      const st = (App && typeof App.getState === "function") ? App.getState() : null;
+
+      if (USP.UI.dispatchTabAction(tabKey, actionId, st)) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
+    }catch(err){}
+  }, { capture:true, passive:false });
+})();
+
+
+// R3: Unified new_row router (capture). Avoid relying on button text per-view.
+(function installNewRowRouter(){
+  if (window.__uspNewRowRouterInstalled) return;
+  window.__uspNewRowRouterInstalled = true;
+
+  function currentTab(){
+    try { return (App && typeof App.getTab === "function") ? App.getTab() : null; } catch(e){ return null; }
+  }
+
+  function isUserTabWithModal(tabKey){
+    try {
+      return tabKey === App.Tabs.DEV || tabKey === App.Tabs.PRODUCT || tabKey === App.Tabs.PROJECT || tabKey === App.Tabs.TODO;
+    } catch(e){ return false; }
+  }
+
+  function looksLikeNewRowButton(btn){
+    if (!btn) return false;
+    // explicit marker (future-proof)
+    const a = (btn.getAttribute && (btn.getAttribute("data-action") || "")) || "";
+    if (String(a).toLowerCase() === "new_row") return true;
+
+    // Heuristics for existing UI: primary button with "Ny" in label, but not modal Save
+    const txt = String(btn.textContent || "").trim().toLowerCase();
+    if (!txt) return false;
+    if (txt.includes("spara") || txt.includes("save") || txt.includes("cancel") || txt.includes("avbryt")) return false;
+    if (txt.includes("arkiv")) return false;
+    // "+ ny ..." / "ny ..." / "nytt ..."
+    if (txt.includes("ny")) return true;
+    return false;
+  }
+
+  document.addEventListener("click", function(e){
+    try{
+      const t = e && e.target;
+      if (!t || !t.closest) return;
+
+      // Don't interfere with clicks inside modal
+      if (t.closest(".usp-modal-overlay") || t.closest(".usp-modal")) return;
+
+      const tabKey = currentTab();
+      if (!tabKey || !isUserTabWithModal(tabKey)) return;
+
+      const btn = t.closest("button");
+      if (!btn) return;
+      if (!looksLikeNewRowButton(btn)) return;
+
+      // Guard: only treat as new_row if explicitly marked or inside table hero-actions
+      const isExplicitNewRow = !!(btn.dataset && btn.dataset.action === "new_row");
+      const inHeroActions = !!(btn.closest && btn.closest(".hero-actions"));
+      if (!isExplicitNewRow && !inHeroActions) return;
+
+      // Attempt to open modal; if it succeeds, stop legacy behavior.
+      const st = (App && typeof App.getState === "function") ? App.getState() : null;
+      if (USP && USP.UI && typeof USP.UI.dispatchTabAction === "function" && USP.UI.dispatchTabAction(tabKey, "new_row", st)) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
+    }catch(err){}
+  }, { capture:true, passive:false });
+})();
+
+
   // ---------------------------
   // Shared helpers (global scope)
   // ---------------------------
@@ -24,26 +348,6 @@
       if (tabKey === App.Tabs.ROUTINES) return "Rutiner";
       if (tabKey === App.Tabs.SETTINGS) return "Settings";
     } catch(e) {}
-
-  function rowDisplayNameForNotes(tabKey, row, st) {
-    try {
-      const r = row || {};
-      const f = r.fields || {};
-      if (tabKey === App.Tabs.TODO) return String(f["Beskrivning"] || "");
-      if (tabKey === App.Tabs.PROJECT) return String(f["Projektnamn"] || "");
-      if (tabKey === App.Tabs.ROUTINES) return String(f["Rutin"] || "");
-      const schema = (App.getSchema ? App.getSchema(tabKey, st) : null) || {};
-      const cols = schema.fields || schema.columns || [];
-      if (cols && cols.length) {
-        const first = cols[0];
-        const name = first.name || first.key || first.label || first.title;
-        if (name) return String(f[name] || "");
-      }
-      const keys = Object.keys(f);
-      if (keys.length) return String(f[keys[0]] || "");
-    } catch(e) {}
-    return "";
-  }
     return String(tabKey || "");
   }
 
@@ -51,9 +355,9 @@
     if (typeof closeAnyModal === "function") closeAnyModal();
     const st = (App && App.getState) ? App.getState() : {};
     const users = (App && typeof App.listUsers === "function") ? (App.listUsers(st) || []) : [];
-    const title = tableTitleForTab(tabKey) + " – " + String(fieldName || "Ansvarig");
+    const title = (tableTitleForTab ? tableTitleForTab(tabKey) : String(tabKey)) + " - " + String(fieldName || "");
 
-    const overlay = el("div", { class: "usp-modal-overlay" }, []);
+    const overlay = el("div", { class: "usp-modal-overlay usp-notes-overlay" }, []);
     const modal = el("div", { class: "usp-modal" }, []);
     modal.appendChild(el("div", { class: "modal-title" }, [title]));
 
@@ -77,7 +381,7 @@
       });
       const name = (u && u.name) ? String(u.name) : ini;
       lab.appendChild(cb);
-      lab.appendChild(el("span", { class:"modal-check-name" }, [ini + " – " + name]));
+      lab.appendChild(el("span", { class:"modal-check-name" }, [ini]));
       list.appendChild(lab);
     });
 
@@ -90,7 +394,9 @@
       overlay.remove();
     });
     actions.appendChild(btnCancel);
-    actions.appendChild(btnSave);
+  
+actions.appendChild(btnSave);
+
 
     modal.appendChild(list);
     modal.appendChild(actions);
@@ -159,7 +465,17 @@
         try { localStorage.clear(); } catch(e) { console.error(e); }
         location.reload();
       } }, ["Clean local data"]));
-      row.appendChild(el("button", { class:"btn btn-secondary", type:"button", onclick: () => { closeSettingsPopover(); openManageUsers(App.getState()); } }, ["Manage users"]));
+      row.appendChild(el("button", { class:"btn btn-secondary", type:"button", onclick: () => {
+  try{
+    closeSettingsPopover();
+    var fn = (window.USP && window.USP.UI && typeof window.USP.UI.openManageUsers === "function") ? window.USP.UI.openManageUsers : (typeof openManageUsers === "function" ? openManageUsers : null);
+    if (!fn) { console.error("[ui] openManageUsers not available"); return; }
+    fn(App.getState());
+  }catch(e){
+    console.error("[ui] Manage users click failed", e);
+    try{ alert("Manage users failed: " + (e && e.message ? e.message : e)); }catch(_){ }
+  }
+} }, ["Manage users"]));
     }
     row.appendChild(el("button", { class:"btn btn-secondary", type:"button", onclick: () => { closeSettingsPopover(); if (App.toggleUser) App.toggleUser(); } }, ["Change user (Dick ↔ Benny)"]));
     pop.appendChild(row);
@@ -219,66 +535,15 @@ function fixedRoutinesSchema() {
 }
 
 function ensureFixedRoutinesSchema(tabKey, state) {
-  // Prevent infinite loops if setSchema triggers a rerender that calls this again.
-  if (_fixingRoutinesSchema) return;
-
   try {
-    if (String(tabKey) !== String(App.Tabs.ROUTINES)) return;
-
-    const st = state || App.getState();
-    const cur = App.getSchema(tabKey, st) || {};
-    const want = fixedRoutinesSchema();
-
-    const curFields = Array.isArray(cur.fields) ? cur.fields : [];
-    const wantFields = want.fields;
-
-    // Fast check: count + names
-    const sameCount = curFields.length === wantFields.length;
-    const sameNames =
-      sameCount &&
-      wantFields.every((wf, idx) => String((curFields[idx] || {}).name || "") === wf.name);
-
-    // Check whether any field needs patching (type/notes/order)
-    let needsPatch = !sameCount || !sameNames;
-
-    if (!needsPatch) {
-      for (let i = 0; i < wantFields.length; i++) {
-        const f = curFields[i] || {};
-        const hasNotes = !!(f.mods && f.mods.notes);
-        const typeOk = String(f.type || "") === "text";
-        const orderOk = Number.isFinite(f.order) ? f.order === i : true;
-        if (!hasNotes || !typeOk || !orderOk) {
-          needsPatch = true;
-          break;
-        }
-      }
+    if (App.FixedTables && typeof App.FixedTables.ensureSchema === "function") {
+      App.FixedTables.ensureSchema(tabKey, state);
     }
-
-    if (!needsPatch) return;
-
-    _fixingRoutinesSchema = true;
-
-    const patchedFields = wantFields.map((wf, idx) => {
-      const f = curFields[idx] || {};
-      return Object.assign({}, f, {
-        id: f.id || wf.id,
-        order: idx,
-        name: wf.name,
-        type: "text",
-        mods: { notes: true }
-      });
-    });
-
-    App.setSchema(
-      tabKey,
-      Object.assign({}, cur, { version: cur.version || 1, fields: patchedFields })
-    );
   } catch (e) {
     console.warn("ensureFixedRoutinesSchema failed", e);
-  } finally {
-    _fixingRoutinesSchema = false;
   }
 }
+
 
 // ---------------------------
 // Fixed ToDo schema (Kategori, Beskrivning, Klart)
@@ -298,44 +563,14 @@ function fixedTodoSchema() {
 let _fixingTodoSchema = false;
 function ensureFixedTodoSchema(tabKey, state) {
   try {
-    if (String(tabKey) !== String(App.Tabs.TODO)) return;
-    if (_fixingTodoSchema) return;
-    _fixingTodoSchema = true;
-
-    const st = state || App.getState();
-    const cur = App.getSchema(tabKey, st) || {};
-    const want = fixedTodoSchema();
-    const curFields = Array.isArray(cur.fields) ? cur.fields : [];
-    const wantFields = want.fields;
-
-    const sameCount = curFields.length === wantFields.length;
-    const sameNames = sameCount && wantFields.every((wf, idx) => String((curFields[idx]||{}).name||"") === wf.name);
-    const sameTypes = sameCount && wantFields.every((wf, idx) => String((curFields[idx]||{}).type||"") === wf.type);
-
-    if (!sameCount || !sameNames || !sameTypes) {
-      App.setSchema(tabKey, want);
-      return;
+    if (App.FixedTables && typeof App.FixedTables.ensureSchema === "function") {
+      App.FixedTables.ensureSchema(tabKey, state);
     }
-
-    // ensure mods for description (initials + notes + rightclick behavior)
-    const patched = wantFields.map((wf, idx) => {
-      const f = curFields[idx] || {};
-      return Object.assign({}, f, {
-        id: f.id || wf.id,
-        order: idx,
-        name: wf.name,
-        type: wf.type,
-        mods: Object.assign({}, (f.mods||{}), (wf.mods||{}))
-      });
-    });
-
-    App.setSchema(tabKey, Object.assign({}, cur, { version: cur.version || 1, fields: patched }));
   } catch (e) {
     console.warn("ensureFixedTodoSchema failed", e);
-  } finally {
-    _fixingTodoSchema = false;
   }
 }
+
 
 
 // ---------------------------
@@ -360,28 +595,27 @@ function fixedProjectSchema() {
 let _fixingProjectSchema = false;
 function ensureFixedProjectSchema(tabKey, state) {
   try {
-    if (String(tabKey) !== String(App.Tabs.PROJECT)) return;
-    if (_fixingProjectSchema) return;
-    _fixingProjectSchema = true;
-
-    const current = App.getSchema(tabKey, state);
-    const desired = fixedProjectSchema();
-
-    const ok = current && Array.isArray(current.fields) && current.fields.length === desired.fields.length
-      && current.fields.map(f => f.name).join("|") === desired.fields.map(f => f.name).join("|");
-
-    if (!ok) {
-      App.setSchema(tabKey, desired, state);
+    if (App.FixedTables && typeof App.FixedTables.ensureSchema === "function") {
+      App.FixedTables.ensureSchema(tabKey, state);
     }
   } catch (e) {
-    console.error("ensureFixedProjectSchema failed", e);
-  } finally {
-    _fixingProjectSchema = false;
+    console.warn("ensureFixedProjectSchema failed", e);
   }
 }
 
 
-const TODO_CATEGORIES = ["Allmänt","Info","Shopify-B2C","Shopify-B2B","Logistik","Privat"];
+
+const TODO_CATEGORIES = (function(){
+    const cfgCats =
+      (App.Config && App.Config.registers && App.Config.registers.todokategori) ? App.Config.registers.todokategori :
+      (App.Config && App.Config.DEFAULT_REGISTRIES && App.Config.DEFAULT_REGISTRIES.todokategori) ? App.Config.DEFAULT_REGISTRIES.todokategori :
+      (App.Config && App.Config.todokategori) ? App.Config.todokategori :
+      null;
+    const base = Array.isArray(cfgCats) ? cfgCats : ["Allmänt","Info","Sälj/Marknad","Shopify-B2C/B2B","Logistik","Privat"];
+    const a = base.map(v => (v==null ? "" : String(v)).trim()).filter(v => v && v !== "Alla");
+    const seen = {};
+    return a.filter(v => (seen[v] ? false : (seen[v]=true)));
+  })();
 
 function isoWeek(d) {
   const dt = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
@@ -592,17 +826,27 @@ function isOverdueDate(val) {
 
   function readNotesLog(fields, fieldName) {
     const k = notesKeyFor(fieldName);
-    const v = fields ? fields[k] : null;
+    const kLegacy = String(fieldName) + "__notes"; // legacy key (older builds)
+    const v = fields ? (fields[k] != null ? fields[k] : fields[kLegacy]) : null;
+
     if (Array.isArray(v)) return v;
-    if (typeof v === "string" && v.trim().startsWith("[")) {
-      try { const a = JSON.parse(v); return Array.isArray(a) ? a : []; } catch (e) { return []; }
+    if (typeof v === "string" && v.trim()) {
+      // allow either JSON array or plain text (wrap as one entry)
+      if (v.trim().startsWith("[")) {
+        try { const a = JSON.parse(v); return Array.isArray(a) ? a : []; } catch (e) { return []; }
+      }
+      return [{ ts: new Date().toISOString(), text: v.trim() }];
     }
     return [];
   }
 
   function writeNotesLog(fields, fieldName, logArr) {
     const k = notesKeyFor(fieldName);
-    fields[k] = Array.isArray(logArr) ? logArr : [];
+    const kLegacy = String(fieldName) + "__notes";
+    const arr = Array.isArray(logArr) ? logArr : [];
+    fields[k] = arr;
+    // keep legacy in sync as string (best-effort)
+    try { fields[kLegacy] = JSON.stringify(arr); } catch (e) {}
   }
 
   function formatNotesLog(logArr) {
@@ -617,10 +861,170 @@ function isOverdueDate(val) {
   }
 
   
-  function openNotesModal(tabKey, fieldName, existingLog, onSave) {
+  function openNotesModal(tabKey, a, b, c, d) {
+    // Backwards-compatible Notes modal.
+    // Supports:
+    // 1) openNotesModal(tabKey, rowId, displayField, storageField)
+    // 2) openNotesModal(tabKey, fieldName, existingLog, onSave, opts)
+    if (typeof a === "string" && (Array.isArray(b) || typeof c === "function")) {
+  // Signature (2)
+  const fieldName = a;
+  const existingLog = Array.isArray(b) ? b : [];
+  const onSave = (typeof c === "function") ? c : null;
+  const opts = d || {};
+  // Do NOT close other modals (e.g. NyRad). Only close existing Notes overlays.
+  try {
+    document.querySelectorAll('.usp-notes-overlay').forEach(function(el){ try{ el.remove(); }catch(e){} });
+  } catch(e) {}
+
+  function entryTitle(it){
+    try{
+      if (!it) return "Anteckning";
+      const t = String(it.title || it.rubrik || it.heading || "").trim();
+      if (t) return t;
+      const body = String(it.text || it.note || it.value || "").trim();
+      if (!body) return "Anteckning";
+      return body.split(/\r?\n/)[0].slice(0, 60);
+    }catch(e){ return "Anteckning"; }
+  }
+  function entryBody(it){
+    try{ return String((it && (it.text || it.note || it.value)) || "").trim(); }catch(e){ return ""; }
+  }
+  function openReadOnlyEntry(it){
+    try{
+      const t = entryTitle(it);
+      const overlay2 = el("div", { class: "usp-modal-overlay usp-notes-overlay" }, []);
+      const modal2 = el("div", { class: "usp-modal" }, []);
+      modal2.appendChild(el("div", { class:"modal-title" }, [t]));
+      const body = entryBody(it);
+      modal2.appendChild(el("pre", { class:"modal-notes-pre", style:"white-space:pre-wrap;background:#fff;border:1px solid rgba(17,24,39,.15);border-radius:12px;padding:12px;max-height:45vh;overflow:auto;" }, [body || ""]));
+      const actions2 = el("div", { class:"modal-actions" }, []);
+      const btnClose2 = el("button", { class:"btn", type:"button" }, ["Stäng"]);
+      btnClose2.addEventListener("click", function(){ overlay2.remove(); });
+      actions2.appendChild(btnClose2);
+      modal2.appendChild(actions2);
+      overlay2.appendChild(modal2);
+      overlay2.addEventListener("click", function(e){ if (e && e.target === overlay2) overlay2.remove(); });
+      document.body.appendChild(overlay2);
+      return;
+    }catch(e){}
+  }
+
+  const label = String((opts && opts.label) ? opts.label : (fieldName || "Anteckning"));
+  const parts = [tableTitleForTab(tabKey)];
+  if (opts && opts.rowName) parts.push(String(opts.rowName));
+  parts.push(label);
+  const title = parts.join(" – ");
+
+  const readOnly = !!(opts && opts.readOnly);
+  const overlay = el("div", { class: "usp-modal-overlay" }, []);
+  const modal = el("div", { class: "usp-modal" }, []);
+  modal.appendChild(el("div", { class: "modal-title" }, [title]));
+
+  // Existing notes: show titles as clickable rows (read-only view)
+  if (existingLog && existingLog.length) {
+    const existing = el("div", { class: "modal-notes-existing" }, []);
+    existing.appendChild(el("div", { class:"modal-notes-label" }, ["Befintliga anteckningar:"]));
+
+    const list = el("div", { class:"modal-notes-list", style:"display:flex;flex-direction:column;gap:8px;margin-top:8px;" }, []);
+    (existingLog || []).slice().reverse().forEach(function(it){
+      const t = entryTitle(it);
+      const btn = el("button", { type:"button", class:"btn btn-secondary", style:"text-align:left;justify-content:flex-start;" }, [t]);
+      btn.addEventListener("click", function(e){
+        try{ e.preventDefault(); e.stopPropagation(); }catch(_){}
+        openReadOnlyEntry(it);
+      });
+      list.appendChild(btn);
+    });
+    existing.appendChild(list);
+    modal.appendChild(existing);
+  }
+
+  if (!readOnly) {
+    // New note inputs: Rubrik + Anteckning
+    const rub = el("input", { class:"input full", placeholder:"Rubrik...", type:"text" }, []);
+    const ta = el("textarea", { class:"modal-textarea", rows:"6", placeholder:"Skriv anteckning..." }, []);
+    modal.appendChild(el("div", { class:"label", style:"margin-top:10px;" }, ["Rubrik"]));
+    modal.appendChild(rub);
+    modal.appendChild(el("div", { class:"label", style:"margin-top:10px;" }, ["Anteckning"]));
+    modal.appendChild(ta);
+
+    const actions = el("div", { class: "modal-actions" }, []);
+    const btnCancel = el("button", { class:"btn", type:"button" }, ["Cancel"]);
+    const btnSave = el("button", { class:"btn", type:"button" }, ["Save"]);
+    btnCancel.addEventListener("click", function(){ overlay.remove(); });
+    btnSave.addEventListener("click", function(){
+      const body = String(ta.value || "").trim();
+      const head = String(rub.value || "").trim();
+      if (!body && !head) { overlay.remove(); return; }
+
+      const entry = {
+        ts: new Date().toISOString(),
+        by: (typeof currentInitials === "function") ? String(currentInitials() || "").trim() : "",
+        title: head,
+        text: body
+      };
+
+      const nextLog = (Array.isArray(existingLog) ? existingLog.slice() : []);
+      nextLog.push(entry);
+
+      // Call onSave in a backwards-compatible way.
+      if (onSave) {
+        try { onSave(nextLog); }
+        catch (e1) { try { onSave(body); } catch (e2) {} }
+      }
+      overlay.remove();
+    });
+    actions.appendChild(btnCancel);
+    actions.appendChild(btnSave);
+    modal.appendChild(actions);
+
+    try { rub.focus(); } catch(e){}
+  } else {
+    const actions = el("div", { class: "modal-actions" }, []);
+    const btnClose = el("button", { class:"btn", type:"button" }, ["Stäng"]);
+    btnClose.addEventListener("click", function(){ overlay.remove(); });
+    actions.appendChild(btnClose);
+    modal.appendChild(actions);
+  }
+
+  overlay.appendChild(modal);
+  overlay.addEventListener("click", function(e){
+    if (e && e.target === overlay) overlay.remove();
+  });
+  document.body.appendChild(overlay);
+  return;
+}
+
+// Signature (1)
+    const rowId = a;
+    const displayField = b;
+    const storageField = c;
+
+    const fieldName = storageField || displayField;
+    const rows = (typeof App.listRows === "function") ? (App.listRows(tabKey) || []) : [];
+    const row = (rows || []).find(r => r && String(r.id) === String(rowId)) || null;
+    if (!row) return;
+
+    // Row label (best effort)
+    let rowName = "";
+    try{
+      const spec = (App.getFixedTableSpec ? App.getFixedTableSpec(tabKey) : null) || null;
+      const firstCol = (spec && spec.columns && spec.columns[0]) ? spec.columns[0].name : "";
+      rowName = (row && row.fields && firstCol) ? String(row.fields[firstCol] || "").trim() : "";
+    }catch(e){}
+
     closeAnyModal();
-    const rowName = String(arguments[4] || "");
-    const title = tableTitleForTab(tabKey) + " – " + (rowName ? (rowName + " – ") : "") + String(fieldName || "Anteckning");
+
+    const colTitle = String(displayField || fieldName || "Anteckning");
+    const parts = [tableTitleForTab(tabKey)];
+    if (rowName) parts.push(rowName);
+    parts.push(colTitle);
+    const title = parts.join(" – ");
+
+    // Existing notes log
+    const existingLog = readNotesLog((row && row.fields) ? row.fields : {}, fieldName);
+
     const overlay = el("div", { class: "usp-modal-overlay" }, []);
     const modal = el("div", { class: "usp-modal" }, []);
     const h = el("div", { class: "modal-title" }, [title]);
@@ -636,12 +1040,30 @@ function isOverdueDate(val) {
     const actions = el("div", { class: "modal-actions" }, []);
     const btnCancel = el("button", { class:"btn", type:"button" }, ["Cancel"]);
     const btnSave = el("button", { class:"btn", type:"button" }, ["Save"]);
+
     btnCancel.addEventListener("click", function(){ overlay.remove(); });
+
     btnSave.addEventListener("click", function(){
       const t = String(ta.value || "").trim();
-      if (typeof onSave === "function") onSave(t);
+      if (!t) { overlay.remove(); return; }
+
+      const st = (typeof App.getState === "function") ? App.getState() : null;
+      const cur = getRowSafe(tabKey, rowId, st) || row;
+      if (!cur) { overlay.remove(); return; }
+
+      const nextRow = Object.assign({}, cur, {
+        updatedAt: new Date().toISOString(),
+        fields: Object.assign({}, cur.fields || {})
+      });
+
+      const log = readNotesLog(nextRow.fields, fieldName);
+      log.push({ ts: new Date().toISOString(), by: currentInitials(), text: t });
+      writeNotesLog(nextRow.fields, fieldName, log);
+
+      if (typeof App.upsertRow === "function") App.upsertRow(tabKey, nextRow);
       overlay.remove();
     });
+
     actions.appendChild(btnCancel);
     actions.appendChild(btnSave);
 
@@ -650,42 +1072,1133 @@ function isOverdueDate(val) {
     modal.appendChild(ta);
     modal.appendChild(actions);
     overlay.appendChild(modal);
+
+    overlay.addEventListener("click", function(e){
+      if (e && e.target === overlay) overlay.remove();
+    });
+
     document.body.appendChild(overlay);
     try { ta.focus(); } catch(e) {}
   }
 
 
-  // VERSION 249: Global notes helpers (blue icon + click) used across views
+
+// ===== R3: Row modal (Cancel/Save) for selected tabs (GLOBAL) =====
+function openRowModal(tabKey, opts) {
+  const st = App.getState();
+  try { if (App.FixedTables && typeof App.FixedTables.ensureSchema === "function") App.FixedTables.ensureSchema(tabKey, st); } catch(e) {}
+  const st2 = App.getState();
+  const schema = App.getSchema(tabKey, st2) || { fields: [] };
+let fieldsAll = sortFields(schema.fields || []);
+  // For fixed tables (DEV/PRODUCT/PROJECT), build modal fields directly from FixedTables spec.
+  // This avoids relying on state schema sync in the modal flow and guarantees hidden default-columns exist.
+  try {
+    const t = String(tabKey||"").toLowerCase();
+    let spec = null;
+    if (t === "dev" && App.FixedTables && App.FixedTables.DEV) spec = App.FixedTables.DEV;
+    if (t === "product" && App.FixedTables && App.FixedTables.PRODUCT) spec = App.FixedTables.PRODUCT;
+    if (t === "project" && App.FixedTables && App.FixedTables.PROJECT) spec = App.FixedTables.PROJECT;
+
+    if (spec && Array.isArray(spec.columns)) {
+      const cols = spec.columns;
+      const specFields = cols.map((c, i) => {
+        const f = {
+          id: "fx_" + t + "_" + i,
+          order: i,
+          name: String((c && c.name) || "").trim(),
+          type: String((c && c.type) || "text").trim(),
+          mods: (c && c.mods) ? (function(){ try { return JSON.parse(JSON.stringify(c.mods)); } catch(e){ return Object.assign({}, c.mods); } })() : {}
+        };
+        if (c && c.width) f.width = c.width;
+        if (c && c.registry) f.registry = c.registry;
+        if (c && c.key) f.key = true;
+        return f;
+      }).filter(f => f.name);
+      fieldsAll = sortFields(specFields);
+      _logDefaults("[NyRad] using FixedTables columns", {tabKey:t, n: fieldsAll.length, names: fieldsAll.map(f=>f.name)});
+    }
+  } catch(eFT) { _logDefaults("[NyRad] FixedTables override failed", eFT); }
+const todoNew = !!(opts && opts.todoNew) && (App.Tabs && tabKey === App.Tabs.TODO);
+let onlyFields = (opts && Array.isArray(opts.onlyFields)) ? opts.onlyFields.map(x => String(x)) : null;
+// DEV: always show all DEV columns in NyRad modal (ignore any onlyFields passed from callers)
+
+const fields = onlyFields
+  ? onlyFields.map(n => fieldsAll.find(f => String(f.name||"").trim() === String(n).trim())).filter(Boolean)
+  : ((todoNew && String(tabKey||"").toLowerCase()==="todo") ? fieldsAll.filter(f => ["Kategori","Beskrivning","Klart"].includes(String(f.name||"").trim())) : fieldsAll);
+  _logDefaults("[NyRad] modal fields computed", {
+    tabKey: tabKey,
+    onlyFields: !!onlyFields,
+    fieldsLen: Array.isArray(fields) ? fields.length : null,
+    fields: Array.isArray(fields) ? fields.map(f=>String(f.name||"").trim()) : null,
+    fieldsAllLen: Array.isArray(fieldsAll) ? fieldsAll.length : null,
+    fieldsAll: Array.isArray(fieldsAll) ? fieldsAll.map(f=>String(f.name||"").trim()).slice(0,30) : null
+  });
+  // DEV: ensure "Syfte" is included in NyRad modal (some configs only request first fields)
+  if (String(tabKey||"").toLowerCase() === "dev") {
+    try {
+      if (Array.isArray(fieldsAll) && fieldsAll.find(f => String(f.name||"").trim() === "Syfte")) {
+        if (Array.isArray(fields)) {
+          const has = fields.some(f => String(f.name||"").trim() === "Syfte");
+          if (!has) {
+            // Insert after Kategori if present, else append
+            const idx = fields.findIndex(f => String(f.name||"").trim() === "Kategori");
+            const syfte = fieldsAll.find(f => String(f.name||"").trim() === "Syfte");
+            if (syfte) {
+              if (idx >= 0) fields.splice(idx+1, 0, syfte);
+              else fields.push(syfte);
+            }
+          }
+        }
+      }
+    } catch(eSy) {}
+  }
+
+  const title = (opts && opts.title) ? String(opts.title) : ("Ny rad – " + tableTitleForTab(tabKey));
+
+  // Build initial fields
+  const tmp = Object.assign({}, (opts && opts.initialFields) ? opts.initialFields : {});
+  fields.forEach(f => {
+    const k = String(f.name || "").trim();
+    if (!k) return;
+    if (!(k in tmp)) tmp[k] = "";
+  });
+  _logDefaults("[NyRad] tmp keys after init", {tabKey: tabKey, n: Object.keys(tmp||{}).length, keys: Object.keys(tmp||{}), snapshot: Object.fromEntries(Object.keys(tmp||{}).slice(0,20).map(k=>[k,tmp[k]]))});
+
+  // PRODUCT: apply admin-defined DEFAULT/PRODUCT values + Notes when creating a new row (Ny rad).
+  try {
+    if (String(tabKey||"").toLowerCase() === "product") {
+      const normKey = (s) => String(s || "")
+        .toLowerCase()
+        .replace(/[åä]/g, "a")
+        .replace(/ö/g, "o")
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-+|-+$/g, "");
+
+      const readDefaultByNorm = (norm) => {
+        // Prefer in-memory (no reload required)
+        try {
+          const UI = (window.USP && window.USP.UI) ? window.USP.UI : null;
+          const st2 = UI && UI._defaultsDraftProduct ? UI._defaultsDraftProduct : null;
+          const saved = st2 && st2.saved ? st2.saved : null;
+          if (saved && saved[norm] != null && String(saved[norm]).trim()) return String(saved[norm]);
+        } catch(e0) {}
+        // Persisted key (normalized)
+        try {
+          const v = localStorage.getItem("USP_DEFAULTS_PRODUCT__" + norm);
+          if (v != null && String(v).trim()) return v;
+        } catch(e1) {}
+        // Fallback: scan keys
+        try {
+          for (let i=0;i<localStorage.length;i++){
+            const k = localStorage.key(i);
+            if (!k || !k.startsWith("USP_DEFAULTS_PRODUCT__")) continue;
+            const tail = k.substring("USP_DEFAULTS_PRODUCT__".length);
+            if (normKey(tail) === norm) {
+              const v = localStorage.getItem(k);
+              if (v != null && String(v).trim()) return v;
+            }
+          }
+        } catch(e2) {}
+        return "";
+      };
+
+      const readDefaultNotesByNorm = (norm) => {
+        // Prefer in-memory notes defaults
+        try {
+          const UI = (window.USP && window.USP.UI) ? window.USP.UI : null;
+          const st2 = UI && UI._defaultsDraftProduct ? UI._defaultsDraftProduct : null;
+          const savedN = st2 && st2.savedNotes ? st2.savedNotes : null;
+          const kNotes = String(norm) + "__notes";
+          const v = savedN && savedN[kNotes] != null ? savedN[kNotes] : null;
+          if (Array.isArray(v) && v.length) return v;
+        } catch(e0) {}
+        // Persisted key
+        try {
+          const s = localStorage.getItem("USP_DEFAULTS_PRODUCT__NOTES__" + norm);
+          if (s && String(s).trim()) {
+            const a = JSON.parse(s);
+            if (Array.isArray(a) && a.length) return a;
+          }
+        } catch(e1) {}
+        // Fallback scan
+        try {
+          for (let i=0;i<localStorage.length;i++){
+            const k = localStorage.key(i);
+            if (!k || !k.startsWith("USP_DEFAULTS_PRODUCT__NOTES__")) continue;
+            const tail = k.substring("USP_DEFAULTS_PRODUCT__NOTES__".length);
+            if (normKey(tail) === norm) {
+              const s = localStorage.getItem(k);
+              if (s && String(s).trim()) {
+                const a = JSON.parse(s);
+                if (Array.isArray(a) && a.length) return a;
+              }
+            }
+          }
+        } catch(e2) {}
+        return [];
+      };
+
+      const keyByNorm = {};
+      Object.keys(tmp || {}).forEach((k) => { keyByNorm[normKey(k)] = k; });
+
+      const spec = (App && App.FixedTables) ? App.FixedTables.PRODUCT : null;
+      const cols = (spec && Array.isArray(spec.columns)) ? spec.columns : [];
+      cols.forEach((c) => {
+        const colName = String((c && c.name) || "").trim();
+        if (!colName) return;
+        const nk = normKey(colName);
+        const fieldKey = keyByNorm[nk];
+        if (!fieldKey) return;
+
+        // Only apply if empty
+        if (tmp[fieldKey] != null && String(tmp[fieldKey]).trim()) return;
+
+        const dv = readDefaultByNorm(nk);
+        if (dv != null && String(dv).trim()) tmp[fieldKey] = dv;
+
+        // Notes defaults (only if no notes exist yet)
+        try {
+          const hasN = ((readNotesLog(tmp, fieldKey) || []).length > 0);
+          if (!hasN) {
+            const nlog = readDefaultNotesByNorm(nk);
+            if (Array.isArray(nlog) && nlog.length) writeNotesLog(tmp, fieldKey, nlog);
+          }
+        } catch(eN) {}
+      });
+
+      _logDefaults("[NyRad/PRODUCT] applied defaults on init", {nKeys: Object.keys(tmp||{}).length});
+    }
+  } catch(eP) {}
+
+  // PROJECT: apply admin-defined DEFAULT/PROJECT values when creating a new row (Ny rad).
+  try {
+    if (String(tabKey||"").toLowerCase() === "project") {
+
+      function normKey(s){
+        return String(s || "")
+          .toLowerCase()
+          .replace(/[åä]/g, "a")
+          .replace(/ö/g, "o")
+          .replace(/[^a-z0-9]+/g, "-")
+          .replace(/^-+|-+$/g, "");
+      }
+
+      function readDefaultByNorm(norm){
+        try {
+          const UI = (window.USP && window.USP.UI) ? window.USP.UI : null;
+          const st2 = UI && UI._defaultsDraftProject ? UI._defaultsDraftProject : null;
+          const saved = st2 && st2.saved ? st2.saved : null;
+          if (saved && saved[norm] != null && String(saved[norm]).trim()) return String(saved[norm]);
+        } catch(e0) {}
+        try {
+          const v = localStorage.getItem("USP_DEFAULTS_PROJECT__" + norm);
+          if (v != null && String(v).trim()) return v;
+        } catch(e1) {}
+        try {
+          for (let i=0;i<localStorage.length;i++){
+            const k = localStorage.key(i);
+            if (!k || !k.startsWith("USP_DEFAULTS_PROJECT__")) continue;
+            const tail = k.substring("USP_DEFAULTS_PROJECT__".length);
+            if (normKey(tail) === norm) {
+              const v = localStorage.getItem(k);
+              if (v != null && String(v).trim()) return v;
+            }
+          }
+        } catch(e2) {}
+        return "";
+      }
+
+      function readDefaultNotesByNorm(norm){
+        try {
+          const UI = (window.USP && window.USP.UI) ? window.USP.UI : null;
+          const st2 = UI && UI._defaultsDraftProject ? UI._defaultsDraftProject : null;
+          const savedN = st2 && st2.savedNotes ? st2.savedNotes : null;
+          const kNotes = String(norm) + "__notes";
+          const v = savedN && savedN[kNotes] != null ? savedN[kNotes] : null;
+          if (Array.isArray(v) && v.length) return v;
+        } catch(e0) {}
+        try {
+          const s = localStorage.getItem("USP_DEFAULTS_PROJECT__NOTES__" + norm);
+          if (s && String(s).trim()) {
+            const a = JSON.parse(s);
+            if (Array.isArray(a) && a.length) return a;
+          }
+        } catch(e1) {}
+        return [];
+      }
+
+      const keyByNorm = {};
+      Object.keys(tmp || {}).forEach((k) => { keyByNorm[normKey(k)] = k; });
+
+      const spec = (App && App.FixedTables) ? App.FixedTables.PROJECT : null;
+      const cols = (spec && Array.isArray(spec.columns)) ? spec.columns : [];
+      cols.forEach((c) => {
+        const colName = String((c && c.name) || "").trim();
+        if (!colName) return;
+        const nk = normKey(colName);
+        const fieldKey = keyByNorm[nk];
+        if (!fieldKey) return;
+
+        // Only apply if field is empty
+        if (tmp[fieldKey] != null && String(tmp[fieldKey]).trim()) return;
+
+        const dv = readDefaultByNorm(nk);
+        if (dv != null && String(dv).trim()) tmp[fieldKey] = dv;
+
+        // Apply notes defaults if allowed and none exist yet
+        try {
+          const allowNotes = !!(c && c.mods && (c.mods.notes || c.mods.Notes));
+          if (allowNotes) {
+            const hasN = ((readNotesLog(tmp, fieldKey) || []).length > 0);
+            if (!hasN) {
+              const nlog = readDefaultNotesByNorm(nk);
+              if (Array.isArray(nlog) && nlog.length) writeNotesLog(tmp, fieldKey, nlog);
+            }
+          }
+        } catch(eN) {}
+      });
+
+      _logDefaults("[NyRad/PROJECT] applied defaults on init", {nKeys: Object.keys(tmp||{}).length});
+    }
+  } catch(ePj) {}
+
+
+
+
+  // Tab-specific defaults (user perspective)
+  try {
+    if (tabKey === App.Tabs.TODO) {
+      // default category: filter if set, otherwise "matta"
+      const fc = st && st.session ? String(st.session.todoFilterCat || "") : "";
+      if (fc && fc !== "Alla" && !tmp["Kategori"]) tmp["Kategori"] = fc;
+      if (!tmp["Kategori"]) tmp["Kategori"] = "Allmänt";
+      // default initials for Beskrivning
+      const a = (App.getActingUser ? App.getActingUser(st) : (st.user||{})) || {};
+      const ini = computeInitials(a);
+      if (ini) {
+        const ik = initialsKeyFor("Beskrivning");
+        if (!tmp[ik]) tmp[ik] = ini;
+      }
+    }
+    if (String(tabKey||"").toLowerCase() === "dev") {
+      // Apply admin-defined defaults from DEFAULT/DEV when creating a new row (Ny rad).
+      // We match modal fields by normalized name so casing differences (Design-Po vs Design-PO) still work.
+      function normKey(s){
+        return String(s || "")
+          .toLowerCase()
+          .replace(/[åä]/g, "a")
+          .replace(/ö/g, "o")
+          .replace(/[^a-z0-9]+/g, "-")
+          .replace(/^-+|-+$/g, "");
+      }
+
+      function readDefaultByNorm(norm){
+        // Prefer in-memory saved defaults from DEFAULT view (no reload needed)
+        try {
+          const UI = (window.USP && window.USP.UI) ? window.USP.UI : null;
+          const st2 = UI && UI._defaultsDraftDev ? UI._defaultsDraftDev : null;
+          const saved = st2 && st2.saved ? st2.saved : null;
+          if (saved && saved[norm] != null && String(saved[norm]).trim()) return String(saved[norm]);
+        } catch(e0) {}
+
+        // Primary persisted key (normalized)
+        try {
+          const v = localStorage.getItem("USP_DEFAULTS_DEV__" + norm);
+          if (v != null && String(v).trim()) return v;
+        } catch(e1) {}
+
+        // Fallback: scan all DEV defaults keys and match by normalized suffix
+        try {
+          for (let i=0;i<localStorage.length;i++){
+            const k = localStorage.key(i);
+            if (!k || !k.startsWith("USP_DEFAULTS_DEV__")) continue;
+            const tail = k.substring("USP_DEFAULTS_DEV__".length);
+            if (normKey(tail) === norm) {
+              const v = localStorage.getItem(k);
+              if (v != null && String(v).trim()) return v;
+            }
+          }
+        } catch(e2) {}
+
+        return "";
+      }
+
+      function readDefaultNotesByNorm(norm){
+        // Prefer in-memory saved notes from DEFAULT view (no reload needed)
+        try {
+          const UI = (window.USP && window.USP.UI) ? window.USP.UI : null;
+          const st2 = UI && UI._defaultsDraftDev ? UI._defaultsDraftDev : null;
+          const savedN = st2 && st2.savedNotes ? st2.savedNotes : null;
+          const kNotes = String(norm) + "__notes";
+          const v = savedN && savedN[kNotes] != null ? savedN[kNotes] : null;
+          if (Array.isArray(v) && v.length) return v;
+        } catch(e0) {}
+        // Primary persisted key (normalized)
+        try {
+          const s = localStorage.getItem("USP_DEFAULTS_DEV__NOTES__" + norm);
+          if (s && String(s).trim()) {
+            const a = JSON.parse(s);
+            if (Array.isArray(a) && a.length) return a;
+          }
+        } catch(e1) {}
+        // Fallback: scan all notes keys and match by normalized suffix
+        try {
+          for (let i=0;i<localStorage.length;i++){
+            const k = localStorage.key(i);
+            if (!k || !k.startsWith("USP_DEFAULTS_DEV__NOTES__")) continue;
+            const tail = k.substring("USP_DEFAULTS_DEV__NOTES__".length);
+            if (normKey(tail) === norm) {
+              const s = localStorage.getItem(k);
+              if (s && String(s).trim()) {
+                const a = JSON.parse(s);
+                if (Array.isArray(a) && a.length) return a;
+              }
+            }
+          }
+        } catch(e2) {}
+        return [];
+      }
+
+      // Build lookup of modal field keys by normalized name
+      const keyByNorm = {};
+      Object.keys(tmp || {}).forEach((k) => { keyByNorm[normKey(k)] = k; });
+
+      // Canonical list from FixedTables.DEV.columns
+      try {
+        const spec = (App && App.FixedTables) ? App.FixedTables.DEV : null;
+        const cols = (spec && Array.isArray(spec.columns)) ? spec.columns : [];
+        cols.forEach((c) => {
+          const colName = String((c && c.name) || "").trim();
+          if (!colName) return;
+          const nk = normKey(colName);
+          const fieldKey = keyByNorm[nk];
+          if (!fieldKey) return;
+          if (tmp[fieldKey] != null && String(tmp[fieldKey]).trim()) return; // user/initial value wins
+          const dv = readDefaultByNorm(nk);
+          if (dv != null && String(dv).trim()) tmp[fieldKey] = dv;
+          // Apply DEFAULT/DEV notes if none exist yet for this field
+          try {
+            const hasN = ((readNotesLog(tmp, fieldKey) || []).length > 0);
+            if (!hasN) {
+              const nlog = readDefaultNotesByNorm(nk);
+              if (Array.isArray(nlog) && nlog.length) writeNotesLog(tmp, fieldKey, nlog);
+            }
+          } catch(eN) {}
+        });
+      } catch(e3) {}
+    }
+
+} catch(e) {}
+
+  
+  // Default initials for any field marked with mod "initials"
+  try {
+    const a2 = (App.getActingUser ? App.getActingUser(st) : (st.user || {})) || {};
+    const ini2 = computeInitials(a2);
+    if (ini2) {
+      (fieldsAll || []).forEach((f) => {
+        const name = String((f && f.name) || "").trim();
+        if (!name) return;
+        const mods = (f && (f.mods || f.addons)) || null;
+        let has = false;
+        if (mods) {
+          if (Array.isArray(mods)) has = mods.map(String).includes("initials");
+          else if (typeof mods === "object") has = !!mods["initials"];
+          else if (typeof mods === "string") has = String(mods).includes("initials");
+        }
+        // Also support type add-ons "text+initials"
+        if (!has) {
+          const tr = String((f && f.type) || "");
+          if (tr.includes("+")) has = tr.split("+").slice(1).map(s=>String(s).trim()).includes("initials");
+        }
+        if (!has) return;
+        const ik = initialsKeyFor(name);
+        if (!tmp[ik]) tmp[ik] = ini2;
+      });
+    }
+  } catch(e) {}
+closeAnyModal();
+
+  const overlay = el("div", { class: "usp-modal-overlay" }, []);
+  const modal = el("div", { class: "usp-modal", style:"max-width:820px;width:min(820px, 92vw);" }, []);
+  modal.appendChild(el("div", { class: "modal-title" }, [title]));
+
+  const form = el("div", { class:"modal-form", style:"display:flex;flex-direction:column;gap:10px;margin-top:12px;" }, []);
+
+
+// ToDo: require Beskrivning (red border until non-empty)
+function _setInvalidBorder(elm, invalid){
+  if (!elm) return;
+  if (invalid){
+    elm.style.borderColor = "#d11";
+    elm.style.boxShadow = "0 0 0 1px #d11";
+  } else {
+    elm.style.borderColor = "";
+    elm.style.boxShadow = "";
+  }
+
+
+}
+
+
+  fields.forEach(f => {
+    const name = String(f.name || "").trim();
+    if (!name) return;
+    // Skip technical helper columns for modal (notes/initials-only)
+    const baseType = (App.FieldTypes && App.FieldTypes.normalizeBaseType) ? App.FieldTypes.normalizeBaseType(f.type) : String(f.type || "text");
+    if (baseType === "notes") return;
+
+    const rowWrap = el("div", { "data-field-name": name, style:"display:grid;grid-template-columns: 180px 1fr;gap:12px;align-items:center;" }, []);
+    rowWrap.appendChild(el("div", { class:"muted", style:"font-weight:700;" }, [name]));
+
+    const ctx = {
+      tabKey,
+      fieldName: name,
+      field: (todoNew ? Object.assign({}, f, { addons: [] }) : f),
+      baseType,
+      type: f.type,
+      mods: todoNew ? [] : ((App.FieldTypes && App.FieldTypes.typeMods) ? App.FieldTypes.typeMods(f.type) : []),
+      registry: f.registry || f.reg || f.registryName,
+      value: tmp[name],
+      state: st,
+      row: { id:"__new__", fields: tmp },
+      onChange: function(v){ tmp[name] = v; updateNewRowSaveState(); },
+      onNotesClick: (todoNew && (name === "Kategori" || name === "Klart")) ? null : function(){},
+      hasNotes: (todoNew && (name === "Kategori" || name === "Klart")) ? null : function(){ return false; }
+    };
+
+
+
+    // --- R10: Make NyRad follow FixedTables spec mods (initials/notes/corner) like Project ---
+    // In modals, schema fields include `mods` as an object (e.g. {initials:true}).
+    // Previously we derived mods from type string which loses spec behavior.
+    const _mods0 = (f && typeof f.mods === "object" && f.mods) ? f.mods : {};
+    const modsObj = Object.assign({}, _mods0);
+    if (modsObj.initials && modsObj.notesOnInitialsRightClick == null) modsObj.notesOnInitialsRightClick = true;
+
+    const notesFieldName = name;
+    // Back-compat: older builds stored notes on initials-meta field for initials columns.
+    try{
+      if (modsObj && modsObj.initials) {
+        var altN = initialsKeyFor(name);
+        var hasBaseN = (App && App.Notes && typeof App.Notes.has==="function") ? App.Notes.has(tmp, name) : ((readNotesLog(tmp, name) || []).length > 0);
+        var hasAltN  = (App && App.Notes && typeof App.Notes.has==="function") ? App.Notes.has(tmp, altN) : ((readNotesLog(tmp, altN) || []).length > 0);
+        if (!hasBaseN && hasAltN) notesFieldName = altN;
+      }
+    }catch(eNF){}
+
+    function _syncInitialsUI(){
+      try{
+        const btn = rowWrap.querySelector(".act-initials");
+        if (!btn) return;
+        const v = String(tmp[initialsKeyFor(name)] || "").trim();
+        if (v) btn.textContent = v;
+      }catch(e){}
+    }
+    function _syncNotesUI(){
+      try{
+        const btn = rowWrap.querySelector(".act-initials");
+        const has = (readNotesLog(tmp, notesFieldName) || []).length > 0;
+        if (btn){
+          if (has) btn.classList.add("is-notes");
+          else btn.classList.remove("is-notes");
+        }
+      }catch(e){}
+    }
+
+    // Override ctx properties so FieldTypes can render the same addons as in table cells
+    ctx.mods = modsObj;
+    ctx.initialsValue = tmp[initialsKeyFor(name)] || "";
+    ctx.initialsNotesHas = (modsObj && modsObj.initials) ? (function(){ try{ if(App && App.Notes && typeof App.Notes.has==="function") return App.Notes.has(tmp, notesFieldName); }catch(e){} return ((readNotesLog(tmp, notesFieldName) || []).length > 0); })() : false;
+    ctx.notesHas = (function(){ try{ if(App && App.Notes && typeof App.Notes.has==="function") return App.Notes.has(tmp, notesFieldName); }catch(e){} return ((readNotesLog(tmp, notesFieldName) || []).length > 0); })();
+
+    ctx.onInitialsClick = (modsObj && modsObj.initials) ? function(){
+      try{
+        const cur = String(tmp[initialsKeyFor(name)] || "").trim();
+        const save = function(v){
+          tmp[initialsKeyFor(name)] = String(v || "").trim();
+          _syncInitialsUI();
+        };
+        if (window.USP && window.USP.UI && typeof window.USP.UI.openInitialsPicker === "function") {
+          window.USP.UI.openInitialsPicker(tabKey, "__new__", name, cur, save);
+        } else if (typeof openInitialsPicker === "function") {
+          openInitialsPicker(tabKey, "__new__", name, cur, save);
+        }
+      }catch(e){}
+    } : null;
+
+    ctx.onNotesClick = (modsObj && (modsObj.notes || modsObj.initials || modsObj.notesOnInitialsRightClick)) ? function(ev){
+      try{
+        // Open notes modal on the correct storage field (Project behavior: initials notes stored under initialsKeyFor(name))
+        const existing = readNotesLog(tmp, notesFieldName) || [];
+        const onSave = function(t){
+          const now = new Date().toISOString();
+          const log = (readNotesLog(tmp, notesFieldName) || []).concat([{ ts: now, text: String(t||"").trim() }]);
+          writeNotesLog(tmp, notesFieldName, log);
+          _syncNotesUI();
+        };
+        const opts = { label: name, rowName: "__new__" };
+        if (window.USP && window.USP.UI && typeof window.USP.UI.openNotesModal === "function") {
+          window.USP.UI.openNotesModal(tabKey, notesFieldName, existing, onSave, opts);
+        } else if (typeof openNotesModal === "function") {
+          openNotesModal(tabKey, notesFieldName, existing, onSave, opts);
+        }
+      }catch(e){}
+    } : null;
+
+    // Initial sync (in case initialFields already included initials/notes)
+    _syncInitialsUI();
+    _syncNotesUI();
+    // --- end R10 ---
+
+
+// Ensure dropdown registry is correctly resolved for modals (schema may have normalized types)
+try{
+  let regKey = ctx.registry ? String(ctx.registry) : "";
+  const t0 = String(ctx.type || "").toLowerCase();
+  if (!regKey && t0.startsWith("dropdown_")) regKey = t0;
+  if (!regKey && baseType === "dropdown_registry") {
+    const nm = String(name).trim();
+    if (nm === "Kategori") {
+      if (tabKey === App.Tabs.DEV) regKey = "dropdown_dev_kategori";
+      else if (tabKey === App.Tabs.PRODUCT) regKey = "dropdown_product_kategori";
+      else if (tabKey === App.Tabs.TODO) regKey = "dropdown_todo_kategori";
+      else if (tabKey === App.Tabs.PROJECT) regKey = "dropdown_project_kategori";
+    }
+  }
+  if (regKey) {
+    ctx.registry = regKey;
+    ctx.type = regKey; // let FieldTypes pick it up
+  }
+}catch(e){}
+
+if (todoNew && name === "Beskrivning") {
+  const prevOnChange = ctx.onChange;
+  ctx.onChange = function(v){
+    prevOnChange(v);
+  };
+}
+
+
+    let editor = null;
+    try {
+      editor = (App.FieldTypes && typeof App.FieldTypes.renderEditor === "function")
+        ? App.FieldTypes.renderEditor(ctx)
+        : null;
+    } catch(e) { editor = null; }
+
+    if (!editor) {
+      // fallback text
+      editor = el("input", { class:"input", value: String(tmp[name]||""), oninput: (ev)=>{ tmp[name]=String(ev.target.value||""); updateNewRowSaveState(); } }, []);
+    }
+
+    // Adjust field widths in Ny ToDo to match table proportions
+    if (todoNew && (name === "Kategori" || name === "Klart")) {
+      try {
+        const inputEl = (editor && typeof editor.querySelector === "function") 
+          ? (editor.querySelector("input,select") || editor) 
+          : editor;
+        if (inputEl) {
+          inputEl.style.width = (name === "Kategori") ? "18ch" : "14ch";
+          inputEl.style.maxWidth = "100%";
+        }
+      } catch(e){}
+    }
+
+    rowWrap.appendChild(el("div", {}, [editor]));
+    form.appendChild(rowWrap);
+  });
+
+  const btnRow = el("div", { style:"display:flex;justify-content:flex-end;gap:10px;margin-top:18px;" }, []);
+  const btnCancel = el("button", { class: btnClass("secondary"), type:"button", onclick: () => { closeAnyModal(); } }, ["Cancel"]);
+  function updateNewRowSaveState() {
+    try {
+      // DEV NyRad: require Produktidé + Kategori + Syfte
+      if (String(tabKey || "").toLowerCase() === "dev") {
+        const okProduktide = String(tmp["Produktidé"] || "").trim().length > 0;
+        const okKategori = String(tmp["Kategori"] || "").trim().length > 0;
+        const okSyfte = String(tmp["Syfte"] || "").trim().length > 0;
+        if (btnSave) btnSave.disabled = !(okProduktide && okKategori && okSyfte);
+        return;
+      }
+
+      // Existing TODO NyRad rule
+      if (todoNew) {
+        if (btnSave) btnSave.disabled = (String(tmp["Beskrivning"] || "").trim().length === 0);
+        return;
+      }
+
+      if (btnSave) btnSave.disabled = false;
+    } catch(e) {}
+  }
+
+  const btnSave = el("button", { class: btnClass("primary"), type:"button", disabled: null ? "disabled" : null, onclick: () => {
+    const ts = new Date().toISOString();
+    updateNewRowSaveState();
+    // DEV: apply admin-defined DEFAULT/DEV values right before saving the new row
+    if (tabKey === App.Tabs.DEV) {
+      try {
+        _logDefaults("[NyRad/DEV] before apply", {tabKey: tabKey, nKeys: Object.keys(tmp||{}).length, keys: Object.keys(tmp||{}), snapshot: Object.fromEntries(Object.keys(tmp||{}).slice(0,15).map(k=>[k,tmp[k]]))});
+
+        const normKey = (s) => String(s || "")
+          .toLowerCase()
+          .replace(/[åä]/g, "a")
+          .replace(/ö/g, "o")
+          .replace(/[^a-z0-9]+/g, "-")
+          .replace(/^-+|-+$/g, "");
+
+        const readDefault = (norm) => {
+          // in-memory defaults from DEFAULT view
+          try {
+            const UI = (window.USP && window.USP.UI) ? window.USP.UI : null;
+            const st2 = UI && UI._defaultsDraftDev ? UI._defaultsDraftDev : null;
+            const saved = st2 && st2.saved ? st2.saved : null;
+            if (saved && saved[norm] != null && String(saved[norm]).trim()) return String(saved[norm]);
+          } catch(e0) {}
+          // direct key
+          try {
+            const v = localStorage.getItem("USP_DEFAULTS_DEV__" + norm);
+            if (v != null && String(v).trim()) return v;
+          } catch(e1) {}
+          // scan keys (handles legacy/non-normalized tails)
+          try {
+            for (let i=0;i<localStorage.length;i++){
+              const k = localStorage.key(i);
+              if (!k || !k.startsWith("USP_DEFAULTS_DEV__")) continue;
+              const tail = k.substring("USP_DEFAULTS_DEV__".length);
+              if (normKey(tail) === norm) {
+                const v = localStorage.getItem(k);
+                if (v != null && String(v).trim()) return v;
+              }
+            }
+          } catch(e2) {}
+          _logDefaults("[NyRad/DEV] no default", {norm: norm});
+          return "";
+        };
+
+        const readDefaultNotes = (norm) => {
+          // in-memory notes defaults from DEFAULT view
+          try {
+            const UI = (window.USP && window.USP.UI) ? window.USP.UI : null;
+            const st2 = UI && UI._defaultsDraftDev ? UI._defaultsDraftDev : null;
+            const savedN = st2 && st2.savedNotes ? st2.savedNotes : null;
+            const kNotes = String(norm) + "__notes";
+            const v = savedN && savedN[kNotes] != null ? savedN[kNotes] : null;
+            if (Array.isArray(v) && v.length) return v;
+          } catch(e0) {}
+          // direct key
+          try {
+            const s = localStorage.getItem("USP_DEFAULTS_DEV__NOTES__" + norm);
+            if (s && String(s).trim()) {
+              const a = JSON.parse(s);
+              if (Array.isArray(a) && a.length) return a;
+            }
+          } catch(e1) {}
+          // scan keys
+          try {
+            for (let i=0;i<localStorage.length;i++){
+              const k = localStorage.key(i);
+              if (!k || !k.startsWith("USP_DEFAULTS_DEV__NOTES__")) continue;
+              const tail = k.substring("USP_DEFAULTS_DEV__NOTES__".length);
+              if (normKey(tail) === norm) {
+                const s = localStorage.getItem(k);
+                if (s && String(s).trim()) {
+                  const a = JSON.parse(s);
+                  if (Array.isArray(a) && a.length) return a;
+                }
+              }
+            }
+          } catch(e2) {}
+          return [];
+        };
+
+
+        // Ensure hidden DEV columns are present in tmp before applying defaults on save.
+        // This keeps DEFAULT/DEV values for columns that are intentionally not shown in the NyRad modal.
+        try {
+          (fieldsAll || []).forEach((f) => {
+            const k = String((f && f.name) || "").trim();
+            if (!k) return;
+            if (!(k in tmp)) tmp[k] = "";
+          });
+          _logDefaults("[NyRad/DEV] ensured hidden keys before apply", {nKeys: Object.keys(tmp||{}).length, keys: Object.keys(tmp||{})});
+        } catch(eHidden) {}
+
+        // apply for any empty field that has a stored default
+        Object.keys(tmp || {}).forEach((k) => {
+          try {
+            if (tmp[k] != null && String(tmp[k]).trim()) return;
+            const dv = readDefault(normKey(k));
+            if (dv != null && String(dv).trim()) { tmp[k] = dv; _logDefaults("[NyRad/DEV] applied default", {field: k, norm: normKey(k), val: dv}); }
+            // Also apply DEFAULT/DEV notes if none exist yet for this field
+            try {
+              const hasN = ((readNotesLog(tmp, k) || []).length > 0);
+              if (!hasN) {
+                const nlog = readDefaultNotes(normKey(k));
+                if (Array.isArray(nlog) && nlog.length) { writeNotesLog(tmp, k, nlog); _logDefaults("[NyRad/DEV] applied default notes", {field: k, n: nlog.length}); }
+              }
+            } catch(eN) {}
+          } catch(e3) {}
+        });
+      } catch(e4) {}
+    }
+
+    // PRODUCT: apply admin-defined DEFAULT/PRODUCT values + Notes right before saving the new row
+    if (tabKey === App.Tabs.PRODUCT) {
+      try {
+        _logDefaults("[NyRad/PRODUCT] before apply", {tabKey: tabKey, nKeys: Object.keys(tmp||{}).length, keys: Object.keys(tmp||{}), snapshot: Object.fromEntries(Object.keys(tmp||{}).slice(0,15).map(k=>[k,tmp[k]]))});
+
+        const normKey = (s) => String(s || "")
+          .toLowerCase()
+          .replace(/[åä]/g, "a")
+          .replace(/ö/g, "o")
+          .replace(/[^a-z0-9]+/g, "-")
+          .replace(/^-+|-+$/g, "");
+
+        const readDefault = (norm) => {
+          try {
+            const UI = (window.USP && window.USP.UI) ? window.USP.UI : null;
+            const st2 = UI && UI._defaultsDraftProduct ? UI._defaultsDraftProduct : null;
+            const saved = st2 && st2.saved ? st2.saved : null;
+            if (saved && saved[norm] != null && String(saved[norm]).trim()) return String(saved[norm]);
+          } catch(e0) {}
+          try {
+            const v = localStorage.getItem("USP_DEFAULTS_PRODUCT__" + norm);
+            if (v != null && String(v).trim()) return v;
+          } catch(e1) {}
+          try {
+            for (let i=0;i<localStorage.length;i++){
+              const k = localStorage.key(i);
+              if (!k || !k.startsWith("USP_DEFAULTS_PRODUCT__")) continue;
+              const tail = k.substring("USP_DEFAULTS_PRODUCT__".length);
+              if (normKey(tail) === norm) {
+                const v = localStorage.getItem(k);
+                if (v != null && String(v).trim()) return v;
+              }
+            }
+          } catch(e2) {}
+          return "";
+        };
+
+        const readDefaultNotes = (norm) => {
+          try {
+            const UI = (window.USP && window.USP.UI) ? window.USP.UI : null;
+            const st2 = UI && UI._defaultsDraftProduct ? UI._defaultsDraftProduct : null;
+            const savedN = st2 && st2.savedNotes ? st2.savedNotes : null;
+            const kNotes = String(norm) + "__notes";
+            const v = savedN && savedN[kNotes] != null ? savedN[kNotes] : null;
+            if (Array.isArray(v) && v.length) return v;
+          } catch(e0) {}
+          try {
+            const s = localStorage.getItem("USP_DEFAULTS_PRODUCT__NOTES__" + norm);
+            if (s && String(s).trim()) {
+              const a = JSON.parse(s);
+              if (Array.isArray(a) && a.length) return a;
+            }
+          } catch(e1) {}
+          try {
+            for (let i=0;i<localStorage.length;i++){
+              const k = localStorage.key(i);
+              if (!k || !k.startsWith("USP_DEFAULTS_PRODUCT__NOTES__")) continue;
+              const tail = k.substring("USP_DEFAULTS_PRODUCT__NOTES__".length);
+              if (normKey(tail) === norm) {
+                const s = localStorage.getItem(k);
+                if (s && String(s).trim()) {
+                  const a = JSON.parse(s);
+                  if (Array.isArray(a) && a.length) return a;
+                }
+              }
+            }
+          } catch(e2) {}
+          return [];
+        };
+
+        // Ensure hidden PRODUCT columns are present in tmp before applying defaults on save.
+        // This keeps DEFAULT/PRODUCT values for columns that are intentionally not shown in the NyRad modal.
+        try {
+          (fieldsAll || []).forEach((f) => {
+            const k = String((f && f.name) || "").trim();
+            if (!k) return;
+            if (!(k in tmp)) tmp[k] = "";
+          });
+          _logDefaults("[NyRad/PRODUCT] ensured hidden keys before apply", {nKeys: Object.keys(tmp||{}).length, keys: Object.keys(tmp||{})});
+        } catch(eHidden) {}
+
+        Object.keys(tmp || {}).forEach((k) => {
+          if (tmp[k] != null && String(tmp[k]).trim()) return;
+
+          const dv = readDefault(normKey(k));
+          if (dv != null && String(dv).trim()) { tmp[k] = dv; _logDefaults("[NyRad/PRODUCT] applied default", {field: k, norm: normKey(k), val: dv}); }
+
+          try {
+            const hasN = ((readNotesLog(tmp, k) || []).length > 0);
+            if (!hasN) {
+              const nlog = readDefaultNotes(normKey(k));
+              if (Array.isArray(nlog) && nlog.length) { writeNotesLog(tmp, k, nlog); _logDefaults("[NyRad/PRODUCT] applied default notes", {field: k, n: nlog.length}); }
+            }
+          } catch(eN) {}
+        });
+      } catch (e) {}
+    }
+
+    // PROJECT: apply admin-defined DEFAULT/PROJECT values + Notes right before saving the new row
+    if (tabKey === App.Tabs.PROJECT) {
+      try {
+        _logDefaults("[NyRad/PROJECT] before apply", {tabKey: tabKey, nKeys: Object.keys(tmp||{}).length, keys: Object.keys(tmp||{}), snapshot: Object.fromEntries(Object.keys(tmp||{}).slice(0,15).map(k=>[k,tmp[k]]))});
+
+        const normKey = (s) => String(s || "")
+          .toLowerCase()
+          .replace(/[åä]/g, "a")
+          .replace(/ö/g, "o")
+          .replace(/[^a-z0-9]+/g, "-")
+          .replace(/^-+|-+$/g, "");
+
+        const readDefault = (norm) => {
+          try {
+            const UI = (window.USP && window.USP.UI) ? window.USP.UI : null;
+            const st2 = UI && UI._defaultsDraftProject ? UI._defaultsDraftProject : null;
+            const saved = st2 && st2.saved ? st2.saved : null;
+            if (saved && saved[norm] != null && String(saved[norm]).trim()) return String(saved[norm]);
+          } catch(e0) {}
+          try {
+            const v = localStorage.getItem("USP_DEFAULTS_PROJECT__" + norm);
+            if (v != null && String(v).trim()) return v;
+          } catch(e1) {}
+          try {
+            for (let i=0;i<localStorage.length;i++){
+              const k = localStorage.key(i);
+              if (!k || !k.startsWith("USP_DEFAULTS_PROJECT__")) continue;
+              const tail = k.substring("USP_DEFAULTS_PROJECT__".length);
+              if (normKey(tail) === norm) {
+                const v = localStorage.getItem(k);
+                if (v != null && String(v).trim()) return v;
+              }
+            }
+          } catch(e2) {}
+          return "";
+        };
+
+        const readDefaultNotes = (norm) => {
+          try {
+            const UI = (window.USP && window.USP.UI) ? window.USP.UI : null;
+            const st2 = UI && UI._defaultsDraftProject ? UI._defaultsDraftProject : null;
+            const savedN = st2 && st2.savedNotes ? st2.savedNotes : null;
+            const kNotes = String(norm) + "__notes";
+            const v = savedN && savedN[kNotes] != null ? savedN[kNotes] : null;
+            if (Array.isArray(v) && v.length) return v;
+          } catch(e0) {}
+          try {
+            const s = localStorage.getItem("USP_DEFAULTS_PROJECT__NOTES__" + norm);
+            if (s && String(s).trim()) {
+              const a = JSON.parse(s);
+              if (Array.isArray(a) && a.length) return a;
+            }
+          } catch(e1) {}
+          try {
+            for (let i=0;i<localStorage.length;i++){
+              const k = localStorage.key(i);
+              if (!k || !k.startsWith("USP_DEFAULTS_PROJECT__NOTES__")) continue;
+              const tail = k.substring("USP_DEFAULTS_PROJECT__NOTES__".length);
+              if (normKey(tail) === norm) {
+                const s = localStorage.getItem(k);
+                if (s && String(s).trim()) {
+                  const a = JSON.parse(s);
+                  if (Array.isArray(a) && a.length) return a;
+                }
+              }
+            }
+          } catch(e2) {}
+          return [];
+        };
+
+        // Ensure hidden PROJECT columns are present in tmp before applying defaults on save.
+        // This keeps DEFAULT/PROJECT values for columns that are intentionally not shown in the NyRad modal.
+        try {
+          (fieldsAll || []).forEach((f) => {
+            const k = String((f && f.name) || "").trim();
+            if (!k) return;
+            if (!(k in tmp)) tmp[k] = "";
+          });
+          _logDefaults("[NyRad/PROJECT] ensured hidden keys before apply", {nKeys: Object.keys(tmp||{}).length, keys: Object.keys(tmp||{})});
+        } catch(eHidden) {}
+
+        Object.keys(tmp || {}).forEach((k) => {
+          if (tmp[k] != null && String(tmp[k]).trim()) return;
+
+          const dv = readDefault(normKey(k));
+          if (dv != null && String(dv).trim()) { tmp[k] = dv; _logDefaults("[NyRad/PROJECT] applied default", {field: k, norm: normKey(k), val: dv}); }
+
+          try {
+            const hasN = ((readNotesLog(tmp, k) || []).length > 0);
+            if (!hasN) {
+              const nlog = readDefaultNotes(normKey(k));
+              if (Array.isArray(nlog) && nlog.length) { writeNotesLog(tmp, k, nlog); _logDefaults("[NyRad/PROJECT] applied default notes", {field: k, n: nlog.length}); }
+            }
+          } catch(eN) {}
+        });
+      } catch (e) {}
+    }
+
+    // Final safety pass for PROJECT only: merge DEFAULT/PROJECT values for hidden columns
+    // right before the new row is created.
+    try {
+      const tNorm = String(tabKey || "").toLowerCase();
+      if (tNorm === "project") {
+        const normKey = (s) => String(s || "")
+          .toLowerCase()
+          .replace(/[åä]/g, "a")
+          .replace(/ö/g, "o")
+          .replace(/[^a-z0-9]+/g, "-")
+          .replace(/^-+|-+$/g, "");
+
+        const UI = (window.USP && window.USP.UI) ? window.USP.UI : null;
+        const mem = UI && UI._defaultsDraftProject ? UI._defaultsDraftProject : null;
+        const saved = mem && mem.saved ? mem.saved : null;
+        const savedNotes = mem && mem.savedNotes ? mem.savedNotes : null;
+
+        function readDefault(norm){
+          try{
+            if (saved && saved[norm] != null && String(saved[norm]).trim()) return String(saved[norm]);
+          }catch(_){}
+          try{
+            const v = localStorage.getItem("USP_DEFAULTS_PROJECT__" + norm);
+            if (v != null && String(v).trim()) return v;
+          }catch(_){}
+          try{
+            for (let i=0;i<localStorage.length;i++){
+              const k = localStorage.key(i);
+              if (!k || !k.startsWith("USP_DEFAULTS_PROJECT__")) continue;
+              if (k.startsWith("USP_DEFAULTS_PROJECT__NOTES__")) continue;
+              const tail = k.substring("USP_DEFAULTS_PROJECT__".length);
+              if (normKey(tail) === norm) {
+                const v = localStorage.getItem(k);
+                if (v != null && String(v).trim()) return v;
+              }
+            }
+          }catch(_){}
+          return "";
+        }
+
+        function readDefaultNotes(norm){
+          try{
+            const kNotes = String(norm) + "__notes";
+            const v = savedNotes && savedNotes[kNotes] != null ? savedNotes[kNotes] : null;
+            if (Array.isArray(v) && v.length) return v;
+          }catch(_){}
+          try{
+            const s = localStorage.getItem("USP_DEFAULTS_PROJECT__NOTES__" + norm);
+            if (s && String(s).trim()) {
+              const a = JSON.parse(s);
+              if (Array.isArray(a) && a.length) return a;
+            }
+          }catch(_){}
+          try{
+            for (let i=0;i<localStorage.length;i++){
+              const k = localStorage.key(i);
+              if (!k || !k.startsWith("USP_DEFAULTS_PROJECT__NOTES__")) continue;
+              const tail = k.substring("USP_DEFAULTS_PROJECT__NOTES__".length);
+              if (normKey(tail) === norm) {
+                const s = localStorage.getItem(k);
+                if (s && String(s).trim()) {
+                  const a = JSON.parse(s);
+                  if (Array.isArray(a) && a.length) return a;
+                }
+              }
+            }
+          }catch(_){}
+          return [];
+        }
+
+        try{
+          (fieldsAll || []).forEach((f) => {
+            const name = String((f && f.name) || "").trim();
+            if (!name) return;
+            if (!(name in tmp)) tmp[name] = "";
+            if (tmp[name] == null || !String(tmp[name]).trim()) {
+              const dv = readDefault(normKey(name));
+              if (dv != null && String(dv).trim()) tmp[name] = dv;
+            }
+            try{
+              const hasN = ((readNotesLog(tmp, name) || []).length > 0);
+              if (!hasN) {
+                const nlog = readDefaultNotes(normKey(name));
+                if (Array.isArray(nlog) && nlog.length) writeNotesLog(tmp, name, nlog);
+              }
+            }catch(_){}
+          });
+        }catch(_){}
+      }
+    } catch(eFinal) {}
+
+    const row = {
+      id: "row_" + Date.now() + "_" + Math.random().toString(16).slice(2),
+      createdAt: ts,
+      updatedAt: ts,
+      fields: Object.assign({}, tmp),
+      meta: {}
+    };
+    // owner for ToDo
+    try {
+      if (tabKey === App.Tabs.TODO) {
+        const a = (App.getActingUser ? App.getActingUser(st) : (st.user||{})) || {};
+        row.meta.owner = String(a.id || a.email || "");
+      }
+    } catch(e) {}
+    App.upsertRow(tabKey, row);
+    closeAnyModal();
+  } }, ["Save"]);
+
+  btnRow.appendChild(btnCancel);
+  btnRow.appendChild(btnSave);
+  updateNewRowSaveState();
+
+  modal.appendChild(form);
+  modal.appendChild(btnRow);
+  overlay.appendChild(modal);
+
+  overlay.addEventListener("click", function(e){
+    try{ if (e.target === overlay) closeAnyModal(); }catch(err){}
+  });
+
+  document.body.appendChild(overlay);
+}
   function hasNotesInCell(row, fieldName) {
     try {
       const fields = (row && row.fields) ? row.fields : {};
-      const log = readNotesLog(fields, fieldName);
+      const log1 = readNotesLog(fields, fieldName);
+      return Array.isArray(log1) && log1.length > 0;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  // Notes associated specifically with the initials-addon for a given field
+  function hasNotesForInitials(row, fieldName) {
+    try {
+      const fields = (row && row.fields) ? row.fields : {};
+      const ik = (typeof initialsKeyFor === "function")
+        ? initialsKeyFor(fieldName)
+        : (String(fieldName) + "__initials");
+      const log = readNotesLog(fields, ik);
       return Array.isArray(log) && log.length > 0;
     } catch (e) {
       return false;
     }
   }
 
-  function addNoteToCell(tabKey, rowId, fieldName) {
-    const st = App.getState();
-    const row = getRowSafe(tabKey, rowId, st);
-    if (!row) return;
-    const fields = Object.assign({}, row.fields || {});
-    const existing = readNotesLog(fields, fieldName);
-    openNotesModal(tabKey, fieldName, existing, function(t){
-      if (!t) return;
-      const nextLog = existing.concat([{ ts: new Date().toISOString(), by: (App.getActingUser ? ((App.getActingUser(st).initials)||"") : ""), text: t }]);
-      writeNotesLog(fields, fieldName, nextLog);
-      const nextRow = Object.assign({}, row, { fields, updatedAt: new Date().toISOString() });
-      App.upsertRow(tabKey, nextRow);
-    });
+
+
+  function addNoteToCell(tabKey, rowId, fieldName, opts) {
+    opts = opts || {};
+    const displayField = opts.labelField || fieldName;
+    // openNotesModal(tabKey, rowId, displayField, storageField)
+    openNotesModal(tabKey, rowId, displayField, fieldName);
   }
 
-  // Close any open modal overlays (prevents modals leaking into other tabs)
   function closeAnyModal() {
     try {
       const els = document.querySelectorAll(".usp-modal-overlay, .usp-modal, .modal-overlay, .modal");
-      els.forEach(el => { try { el.remove(); } catch(e){} }, rowName);
+      els.forEach(el => { try { el.remove(); } catch(e){} });
     } catch(e) {}
 
 
@@ -803,7 +2316,16 @@ function isOverdueDate(val) {
     return n;
   }
 
-  function byId(id) { return document.getElementById(id); }
+  // Debug flags (set in console): localStorage.USP_DEBUG_DEFAULTS=1
+function _dbgDefaults() {
+  try { return String(localStorage.getItem("USP_DEBUG_DEFAULTS")||"") === "1"; } catch(e){ return false; }
+}
+function _logDefaults() {
+  if (!_dbgDefaults()) return;
+  try { console.log.apply(console, arguments); } catch(e){}
+}
+
+function byId(id) { return document.getElementById(id); }
   function setHtml(node, html) { node.innerHTML = html || ""; }
 
   function ensureRoot() {
@@ -898,6 +2420,15 @@ function isOverdueDate(val) {
       }, [tabLabel(k)]));
     });
 
+    // Admin-only tab: DEFAULT (shown far right)
+    if (((App && App.role) ? App.role(state) : (state && state.user && state.user.role)) === "admin") {
+      tabs.appendChild(el("button", {
+        class: "tab " + ((String(current || "") === "default") ? "is-active" : ""),
+        type: "button",
+        onclick: () => { App.setTab("default"); },
+      }, ["DEFAULT"]));
+    }
+
     const actions = el("div", { class: "top-actions" }, []);
     const acting = (App.getActingUser ? App.getActingUser(state) : state.user) || null;
     const role = App.role(state);
@@ -948,7 +2479,23 @@ function isOverdueDate(val) {
   }
 
   function inputClass() { return "input"; }
-  function btnClass(kind) {
+  
+  // UI helper: delete a row (hard delete) when App.deleteRow isn't provided by bootstrap.
+  if (!App.deleteRow) {
+    App.deleteRow = function deleteRow(tabKey, rowId) {
+      const s0 = (App.getState ? App.getState() : {}) || {};
+      const st = (typeof structuredClone === "function")
+        ? structuredClone(s0)
+        : JSON.parse(JSON.stringify(s0 || {}));
+      const k = tabKey;
+      st.data = st.data || {};
+      st.data[k] = Array.isArray(st.data[k]) ? st.data[k] : [];
+      st.data[k] = st.data[k].filter(r => !(r && r.id === rowId));
+      return App.commitState(st);
+    };
+  }
+
+function btnClass(kind) {
     if (kind === "primary") return "btn btn-primary";
     if (kind === "secondary") return "btn btn-secondary";
     return "btn";
@@ -1017,10 +2564,12 @@ function isOverdueDate(val) {
     return el("div", { style:"display:flex;flex-direction:column;gap:12px;padding:12px 0;" }, [ header, body ]);
   }
 
-function adminSchemaView(state, tabKey, title) {
+function adminSchemaView(state, tabKey, title, opts) {
+    opts = opts || {};
+
     const view = byId("usp-view");
     if (!view) return;
-    setHtml(view, "");
+    if (!opts.append) setHtml(view, "");
 
     const schema = App.getSchema(tabKey, state);
     schema.fields = Array.isArray(schema.fields) ? schema.fields : [];
@@ -1095,8 +2644,6 @@ function adminSchemaView(state, tabKey, title) {
         tr.appendChild(tdNotes);
 
         tr.appendChild(el("td", { style:"text-align:right;padding-left:18px;white-space:nowrap;width:8ch;" }, [ delBtn ]));
-
-
         tbody.appendChild(tr);
       });
     }
@@ -1112,56 +2659,60 @@ function adminSchemaView(state, tabKey, title) {
   // Archive modal (read-only list + restore)
   // ---------------------------
   function openArchiveModal(state, tabKey, title) {
-    const rows = (App.listRows(tabKey, state) || []).filter(r => !!r.archived);
-    const schema = App.getSchema(tabKey, state);
-    const fields = sortFields(schema.fields || []);
-    const fieldNames = fields.map(f => String(f.name || "").trim()).filter(Boolean);
+  const rowsAll = (App.listRows(tabKey, state) || []);
+  const rows = rowsAll.filter(r => !!(r && r.archived));
+  const schema = App.getSchema(tabKey, state) || { fields: [] };
+  const fields = (schema.fields || []);
+  const fieldNames = fields.map(f => String(f.name || "").trim()).filter(Boolean);
 
-    const modal = el("div", { class:"modal-backdrop" }, [
-      el("div", { class:"usp-modal", style:"max-width:920px;" }, [
-        el("div", { class:"modal-head" }, [
-          el("div", { class:"title" }, [title + " – Arkiv"]),
-          el("button", { class:"btn btn-secondary", type:"button", onclick: () => modal.remove() }, ["Stäng"]),
-        ]),
-        el("div", { class:"modal-body" }, [
-          rows.length ? (
-            el("div", { class:"table-wrap" }, [
-              (function(){
-                const table = el("table", { class:"table" }, []);
-                table.appendChild(el("thead", {}, [el("tr", {}, [
-                  ...fieldNames.map(n => el("th", { style: (n==="Kategori" ? "width:17ch;" : (n==="Klart" ? "width:12ch;" : null)) }, [n])),
-        ...((allowDelete || routinesEditable) ? [el("th", { style:"text-align:right;width:16ch;" }, [ (routinesEditable ? "Ta bort" : "") ])] : []),
-                ])]));
-                const tb = el("tbody", {}, []);
-                rows.forEach((r) => {
-                  const tr = el("tr", {}, []);
-                  fieldNames.forEach((n) => tr.appendChild(el("td", {}, [String(((r.fields && r.fields[n]) != null ? (r.fields && r.fields[n]) : ""))])));
-                  tr.appendChild(el("td", { style:"white-space:nowrap;" }, [
-                    el("button", { class:"btn btn-small", type:"button", onclick: () => {
-                      const ok = window.confirm("Återställa raden från arkiv?");
-                      if (!ok) return;
-                      App.unarchiveRow(tabKey, r.id);
-                      modal.remove();
-                      App.callRender();
-                    }}, ["Återställ"])
-                  ]));
-                  tb.appendChild(tr);
-                });
-                table.appendChild(tb);
-                return table;
-              })()
-            ])
-          ) : el("div", { class:"hint" }, ["Arkivet är tomt."])
-        ])
-      ])
-    ]);
-    document.body.appendChild(modal);
-  }
+  const overlay = el("div", {
+    class: "usp-modal-overlay",
+    onclick: (e) => { if (e && e.target === overlay) overlay.remove(); },
+    style: "position:fixed;inset:0;background:rgba(0,0,0,.35);z-index:9999;display:flex;align-items:flex-start;justify-content:center;padding:28px;overflow:auto;"
+  }, []);
 
-  function doneLabel() { return "DONE"; }
+  const modal = el("div", { class:"usp-modal", style:"max-width:980px;width:100%;background:#fff;border-radius:10px;box-shadow:0 10px 30px rgba(0,0,0,.25);" }, [
+    el("div", { class:"modal-head", style:"display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 16px;border-bottom:1px solid #ddd;" }, [
+      el("div", { class:"title", style:"font-weight:700;" }, [String(title || "") + " – Arkiv"]),
+      el("button", { class:"btn btn-secondary", type:"button", onclick: () => overlay.remove() }, ["Stäng"]),
+    ]),
+    el("div", { class:"modal-body", style:"padding:14px 16px;" }, [
+      rows.length ? (function(){
+        const table = el("table", { class:"table" }, []);
+        table.appendChild(el("thead", {}, [
+          el("tr", {}, fieldNames.map(n => el("th", {}, [n])))
+        ]));
+        const tbody = el("tbody", {}, []);
+        rows.forEach(r => {
+          const tr = el("tr", {}, []);
+          fieldNames.forEach(n => {
+            const v = (r && r.fields) ? r.fields[n] : "";
+            tr.appendChild(el("td", {}, [ (v == null) ? "" : String(v) ]));
+          });
+          tbody.appendChild(tr);
+        });
+        table.appendChild(tbody);
+        return table;
+      })() : el("div", { class:"hint" }, ["Arkivet är tomt."])
+    ])
+  ]);
+
+  overlay.appendChild(modal);
+  document.body.appendChild(overlay);
+}
+
+  function doneLabel() { return "Done"; }
 
   function handleDone(state, tabKey, row) {
     if (!row) return;
+    // R1 refactor: prefer centralized actions (non-breaking fallback below)
+    try{
+      if (App && App.Actions && typeof App.Actions.run === "function") {
+        App.Actions.run(tabKey, "done", row, state);
+        return;
+      }
+    }catch(e){}
+
     const ok = window.confirm("Markera som DONE?");
     if (!ok) return;
 
@@ -1207,7 +2758,13 @@ function adminSchemaView(state, tabKey, title) {
     }
 
     if (tabKey === App.Tabs.PRODUCT) {
-      // PRODUCT DONE: archive in PRODUCT
+      // PRODUCT Done: archive
+      App.archiveRow(tabKey, row.id);
+      return;
+    }
+
+    if (tabKey === App.Tabs.PROJECT || tabKey === "project") {
+      // PROJECT Done: archive
       App.archiveRow(tabKey, row.id);
       return;
     }
@@ -1218,25 +2775,167 @@ function adminSchemaView(state, tabKey, title) {
       return;
     }
   }
-function userDataView(state, tabKey, title, opts) {
-    // VERSION 246: notes helpers for user tables (incl routines)
-    function onNotesClick(rowId, fieldName) {
-      const st = App.getState();
-      const row = getRowSafe(tabKey, rowId, st);
-      if (!row) return;
-      const fields = Object.assign({}, row.fields || {});
-      const existing = readNotesLog(fields, fieldName);
-      openNotesModal(tabKey, fieldName, existing, function(t){
-        if (!t) return;
-        const byIni = (App.getActingUser ? ((App.getActingUser(st).initials)||"") : "");
-        const nextLog = existing.concat([{ ts: new Date().toISOString(), by: byIni, text: t }]);
-        writeNotesLog(fields, fieldName, nextLog);
-        const nextRow = Object.assign({}, row, { fields, updatedAt: new Date().toISOString() });
-        App.upsertRow(tabKey, nextRow);
-      });
-      }
 
-    function hasNotesInCell(row, fieldName) {
+
+// ===== Row actions (R2) =====
+function _fmtYMD(d){
+  const y = d.getFullYear();
+  const m = String(d.getMonth()+1).padStart(2,"0");
+  const da = String(d.getDate()).padStart(2,"0");
+  return `${y}-${m}-${da}`;
+}
+
+function legacyRowActions(tabKey, schema, row){
+  // R3 refactor: prefer centralized actions menu when available
+  try{
+    if (App && App.Actions && typeof App.Actions.getMenu === "function" && typeof App.Actions.run === "function") {
+      const menu = App.Actions.getMenu(tabKey) || [];
+      return menu.map(mi => ({
+        id: mi.id,
+        label: mi.label,
+        run: function(){ try{ App.Actions.run(tabKey, mi.id, row, App.getState()); }catch(e){} }
+      }));
+    }
+  }catch(e){}
+
+  try{ if (App && App.Tabs && tabKey === App.Tabs.ROUTINES) return []; }catch(e){}
+  const fields = (schema && Array.isArray(schema.fields)) ? schema.fields : [];
+  const byName = new Map(fields.map(f => [String(f.name||""), f]));
+  const byLower = new Map(fields.map(f => [String(f.name||"").toLowerCase(), f]));
+  const actions = [];
+
+  const klartField = byName.get("Klart") || byLower.get("klart");
+  const statusField = byName.get("Status") || byLower.get("status");
+
+  actions.push({
+    id: "done",
+    label: doneLabel(),
+    run: function(){
+      try{
+        if (typeof handleDone === "function") { handleDone(App.getState(), tabKey, row); return; }
+      }catch(e){}
+      try{
+        if (klartField) {
+          const today = _fmtYMD(new Date());
+          const next = Object.assign({}, row);
+          next.fields = Object.assign({}, row.fields || {});
+          next.fields[klartField.name] = today;
+          App.upsertRow(tabKey, next);
+          return;
+        }
+        if (statusField) {
+          const next = Object.assign({}, row);
+          next.fields = Object.assign({}, row.fields || {});
+          next.fields[statusField.name] = "green";
+          App.upsertRow(tabKey, next);
+          return;
+        }
+        const next = Object.assign({}, row);
+        next.fields = Object.assign({}, row.fields || {});
+        next.fields["Done"] = "1";
+        App.upsertRow(tabKey, next);
+      }catch(e){}
+    }
+  });
+
+  actions.push({
+    id: "remove",
+    label: "Ta bort",
+    run: function(){
+      try{
+        if (typeof App.archiveRow === "function") App.archiveRow(tabKey, row.id);
+        else {
+          const next = Object.assign({}, row, { archived: true, updatedAt: new Date().toISOString() });
+          App.upsertRow(tabKey, next);
+        }
+      }catch(e){}
+    }
+  });
+
+  return actions;
+}
+
+
+// R5 refactor: Single gateway for row actions (override -> App.Actions -> legacy)
+function getRowActions(tabKey, schema, row, actions){
+  // 1) Caller override (function/array) wins
+  if (typeof actions === "function") return (actions(row, tabKey, schema) || []);
+  if (Array.isArray(actions)) return actions;
+
+  // 2) Central actions
+  try{
+    if (App && App.Actions && typeof App.Actions.getMenu === "function" && typeof App.Actions.run === "function") {
+      const menu = App.Actions.getMenu(tabKey) || [];
+      return menu.map(mi => ({
+        id: mi.id,
+        label: mi.label,
+        run: function(){ try{ App.Actions.run(tabKey, mi.id, row, App.getState()); }catch(e){} }
+      }));
+    }
+  }catch(e){}
+
+  // 3) Legacy fallback
+  return legacyRowActions(tabKey, schema, row);
+}
+
+// Back-compat: keep old API name but route through gateway
+function defaultRowActions(tabKey, schema, row){
+  return getRowActions(tabKey, schema, row, null);
+}
+
+function renderRowActionsCell(tabKey, schema, row, actions){
+  const acts = getRowActions(tabKey, schema, row, actions);
+  if (!acts || acts.length === 0) return el("div", {}, [""]);
+  const sel = el("select", { class: "row-actions", onchange: (ev) => {
+    const v = String(ev.target.value||"");
+    if (!v) return;
+    const a = acts.find(x => String(x.id) === v);
+    try { if (a && typeof a.run === "function") a.run(); } catch(e){}
+    try { ev.target.value = ""; } catch(e){}
+  }}, [
+    el("option", { value: "" }, ["Action"]),
+    ...acts.map(a => el("option", { value: a.id }, [a.label]))
+  ]);
+  return sel;
+}
+
+function dataTableView(state, tabKey, title, opts) {
+    // VERSION 247: shared renderer (stable helpers)
+    // Fixed tables: ensure schema is present (Dev/Product/ToDo/Project/Routines)
+    try {
+      if (App.FixedTables && typeof App.FixedTables.ensureSchema === "function") {
+        App.FixedTables.ensureSchema(tabKey, state);
+      }
+    } catch (e) {}
+    
+function onNotesClick(rowId, fieldName) {
+  const st = App.getState();
+  const row = getRowSafe(tabKey, rowId, st);
+  if (!row) return;
+  const fields = Object.assign({}, row.fields || {});
+  const existing = readNotesLog(fields, fieldName);
+
+  const isRoutinesTab = (App && App.Tabs && tabKey === App.Tabs.ROUTINES);
+  const isAdmin = (App && typeof App.isAdminUser === "function") ? !!App.isAdminUser(st) : !!(App && App.isAdmin);
+  const canEditNotes = !isRoutinesTab || isAdmin;
+
+  openNotesModal(
+    tabKey,
+    fieldName,
+    existing,
+    canEditNotes ? function(t){
+      if (!t) return;
+      const byIni = (App.getActingUser ? ((App.getActingUser(st).initials)||"") : "");
+      const nextLog = existing.concat([{ ts: new Date().toISOString(), by: byIni, text: t }]);
+      writeNotesLog(fields, fieldName, nextLog);
+      const nextRow = Object.assign({}, row, { fields, updatedAt: new Date().toISOString() });
+      App.upsertRow(tabKey, nextRow);
+    } : null,
+    canEditNotes ? {} : { readOnly: true }
+  );
+}
+
+function hasNotesInCell(row, fieldName) {
       try {
         const log = readNotesLog((row && row.fields) || {}, fieldName);
         return Array.isArray(log) && log.length > 0;
@@ -1244,24 +2943,53 @@ function userDataView(state, tabKey, title, opts) {
         return false;
       }
     }
+
+    function updateCell(rowId, fieldName, val) {
+      const st = App.getState();
+      const cur = (getRowSafe(tabKey, rowId, st) || null);
+      if (!cur) return;
+      const next = {
+        id: cur.id,
+        createdAt: cur.createdAt,
+        updatedAt: new Date().toISOString(),
+        archived: !!cur.archived,
+        fields: Object.assign({}, cur.fields || {})
+      };
+      next.fields[String(fieldName||"")] = val;
+      App.upsertRow(tabKey, next);
+    }
+
     const view = byId("usp-view");
     if (!view) return;
-    setHtml(view, "");
+    if (!(opts && opts.append)) setHtml(view, "");
 
     const isRoutines = (tabKey === App.Tabs.ROUTINES);
-      if (isRoutines && !_routinesSchemaEnsured) { _routinesSchemaEnsured = true; ensureFixedRoutinesSchema(tabKey, state); }
+    const _noActions = !!(opts && opts.noActions);
+    const _addActionsCol = !_noActions && !isRoutines;
+      if (isRoutines && !_routinesSchemaEnsured) { _routinesSchemaEnsured = true; try{ if (App.FixedTables && typeof App.FixedTables.ensureSchema === "function") App.FixedTables.ensureSchema(tabKey, state); }catch(e){} }
 
     // Re-read schema after potential routines patch
     const schema = App.getSchema(tabKey, state);
-    const fields = sortFields(schema.fields || []);
+  const fieldsAll = sortFields(schema.fields || []);
+const todoNew = !!(opts && opts.todoNew) && (App.Tabs && tabKey === App.Tabs.TODO);
+const onlyFields = (opts && Array.isArray(opts.onlyFields)) ? opts.onlyFields.map(x => String(x)) : null;
+const fields = onlyFields
+  ? onlyFields.map(n => fieldsAll.find(f => String(f.name||"").trim() === String(n).trim())).filter(Boolean)
+  : (todoNew ? fieldsAll.filter(f => ["Kategori","Beskrivning","Klart"].includes(String(f.name||"").trim())) : fieldsAll);
 
-    const routinesEditable = isRoutines && !!(opts && opts.routinesEditable);
+
+    const isAdmin = (App && typeof App.isAdminUser === "function") ? !!App.isAdminUser(state) : (String(role||"") === "admin");
+    const routinesEditable = isRoutines && isAdmin;
     const routinesReadOnly = isRoutines && !routinesEditable;
-    const allowDelete = (!isRoutines) && (tabKey === App.Tabs.DEV || tabKey === App.Tabs.PRODUCT);
+    const allowDelete = (!isRoutines) && (opts && typeof opts.allowDelete === "boolean" ? opts.allowDelete : (tabKey === App.Tabs.DEV || tabKey === App.Tabs.PRODUCT));
 
     // User works with data; routines are read-only.
     const rowsAll = (App.listRows(tabKey, state) || []);
-    const rows = rowsAll.filter(r => !r.archived);
+    let rows = rowsAll.filter(r => !r.archived);
+    if (opts && Array.isArray(opts.rows)) rows = opts.rows;
+    if (opts && typeof opts.filterRows === "function") {
+      try { rows = opts.filterRows(rows, rowsAll) || rows; } catch(e) {}
+    }
 
     // Buttons
     // - Rutiner: admin kan skapa nya rutiner (+ Ny rad). User har inga actions.
@@ -1269,29 +2997,45 @@ function userDataView(state, tabKey, title, opts) {
     const heroButtons = [];
     if (isRoutines) {
       if (routinesEditable) {
-        heroButtons.push(el("button", { class: btnClass("primary"), type:"button", onclick: () => {
-          const base = { id: "row_" + Date.now(), createdAt: new Date().toISOString(), fields: {} };
+        
+heroButtons.push(el("button", { class: btnClass("primary"), type:"button", "data-action":"new_row", "data-tab": tabKey, onclick: () => {
+        try{
+  if (typeof openRowModal === "function") {
+    openRowModal(tabKey, { title: "Ny rutin", onlyFields: ["Rutin","Steg1","Steg2","Steg 3","Steg 4","Steg5"] });
+    return;
+  }
+}catch(e){}
+        const base = { id: "row_" + Date.now(), createdAt: new Date().toISOString(), fields: {} };
           fields.forEach(f => { const k = String(f.name || "").trim(); if (k) base.fields[k] = ""; });
           App.upsertRow(tabKey, base);
         }}, ["+ Ny rad"]));
       }
     } else {
-      heroButtons.push(el("button", { class: btnClass("primary"), type:"button", onclick: () => {
-        const base = { id: "row_" + Date.now(), createdAt: new Date().toISOString(), fields: {} };
-        fields.forEach(f => { const k = String(f.name || "").trim(); if (k) base.fields[k] = ""; });
-        App.upsertRow(tabKey, base);
-      }}, [ (tabKey === (App.Tabs && App.Tabs.DEV ? App.Tabs.DEV : "dev") ? "+ Ny Utveckling" : (tabKey === (App.Tabs && App.Tabs.PRODUCT ? App.Tabs.PRODUCT : "product") ? "+ Ny Produkt" : "+ Ny rad")) ]));
+      heroButtons.push(el("button", { class: btnClass("primary"), type:"button", "data-action":"new_row", "data-tab": tabKey, onclick: (e) => {
+        try{
+          const st = (App && typeof App.getState === "function") ? App.getState() : null;
+          if (USP && USP.UI && typeof USP.UI.dispatchTabAction === "function") {
+            const handled = USP.UI.dispatchTabAction(tabKey, "new_row", st);
+            if (handled) return;
+          }
+        }catch(err){}
+
+        // If modal router is unavailable or failed, do NOT create a row silently.
+        try{ console.warn("[ui] new_row modal not available for tab", tabKey); }catch(e){}
+      } }, [ (tabKey === (App.Tabs && App.Tabs.DEV ? App.Tabs.DEV : "dev") ? "+ Ny Utveckling" : (tabKey === (App.Tabs && App.Tabs.PRODUCT ? App.Tabs.PRODUCT : "product") ? "+ Ny Produkt" : "+ Ny rad")) ]));
 
       heroButtons.push(el("button", { class: btnClass("secondary"), type:"button", onclick: () => {
         openArchiveModal(App.getState(), tabKey, title);
       }}, ["Arkiv"]));
     }
+    if (!(opts && opts.noHero)) {
 
     view.appendChild(hero(
       title,
       isRoutines ? (routinesEditable ? "Admin skapar rutiner (ny rutin = Ny rad). User kan bara läsa." : "Rutiner är en passiv beskrivning som kan läsas av alla.") : "",
       heroButtons
     ));
+    }
 
     const fieldNames = fields.map(f => String(f.name || "").trim()).filter(Boolean);
 
@@ -1299,7 +3043,7 @@ function userDataView(state, tabKey, title, opts) {
     table.appendChild(el("thead", {}, [
       el("tr", {}, [
         ...fieldNames.map(n => el("th", { style: (n==="Kategori" ? "width:17ch;" : (n==="Klart" ? "width:12ch;" : null)) }, [n])),
-        ...(allowDelete ? [el("th", { style:"text-align:right;width:16ch;" }, [""])] : []),
+        ...( _addActionsCol ? [el("th", { style:"width:12ch;" }, ["Action"])] : []),
       ])
     ]));
 
@@ -1316,17 +3060,21 @@ function userDataView(state, tabKey, title, opts) {
         fieldNames.forEach((n) => {
           if (routinesReadOnly) {
             const field = (fields || []).find(x => String(x.name || "").trim() === n) || { name: n, type: "text", mods: { notes: true } };
-            const tkey = (App.FieldTypes && App.FieldTypes.normalizeType) ? App.FieldTypes.normalizeType(field.type) : String(field.type || "text");
+            let tkey = (App.FieldTypes && App.FieldTypes.normalizeBaseType) ? App.FieldTypes.normalizeBaseType(field.type) : String(field.type || "text");
             const cellVal = ((r.fields && r.fields[n]) != null ? (r.fields && r.fields[n]) : "");
             tr.appendChild(el("td", {}, [
               (App.FieldTypes && typeof App.FieldTypes.renderEditor === "function")
                 ? App.FieldTypes.renderEditor({
                     baseType: tkey,
+                    type: (field && field.type) ? field.type : tkey,
                     mods: (field && field.mods) ? field.mods : { notes: true },
+                    registry: (field && (field.registry || field.reg || field.registryName)) ? (field.registry || field.reg || field.registryName) : null,
                     value: cellVal,
-                    disabled: true,
+                    disabled: false,
+                    onChange: function(v){ updateCell(r.id, n, v); },
                     notesHas: hasNotesInCell(r, n),
-                    onNotesClick: (field && field.mods && field.mods.notes) ? (() => addNoteToCell(tabKey, r.id, n)) : null,
+          initialsNotesHas: (field && field.mods && field.mods.initials) ? hasNotesForInitials(r, n) : false,
+onNotesClick: (field && field.mods && (field.mods.notes || field.mods.initials)) ? (() => addNoteToCell(tabKey, r.id, (field.mods && field.mods.initials) ? initialsKeyFor(n) : n, { labelField: n })) : null,
                     onChange: function(){},
                   })
                 : String(cellVal)
@@ -1336,27 +3084,31 @@ function userDataView(state, tabKey, title, opts) {
           tr.appendChild(el("td", {}, [
             (function () {
               const field = (fields || []).find(x => String(x.name || "").trim() === n) || { name: n, type: "text" };
-              const tkey = (App.FieldTypes && App.FieldTypes.normalizeType) ? App.FieldTypes.normalizeType(field.type) : String(field.type || "text");
+              let tkey = (App.FieldTypes && App.FieldTypes.normalizeBaseType) ? App.FieldTypes.normalizeBaseType(field.type) : String(field.type || "text");
               const cellVal = ((r.fields && r.fields[n]) != null ? (r.fields && r.fields[n]) : "");
+
+              // Custom per-field renderer hook (used by fixed tables like Project).
+              if (opts && typeof opts.fieldCellRenderer === "function") {
+                try {
+                  const node = opts.fieldCellRenderer({ tabKey, row: r, field, fieldName: n, value: cellVal, updateCell });
+                  if (node) return node;
+                } catch(e) {}
+              }
 
               // Routines: read-only already handled above.
               if (App.FieldTypes && typeof App.FieldTypes.renderEditor === "function") {
                 return App.FieldTypes.renderEditor({
                   baseType: tkey,
+                    type: (field && field.type) ? field.type : tkey,
                   mods: (field && field.mods) ? field.mods : {},
+                  registry: (field && (field.registry || field.reg || field.registryName)) ? (field.registry || field.reg || field.registryName) : null,
                   value: cellVal,
                   disabled: false,
-                  notesHas: (field && field.mods && field.mods.notes) ? hasNotesInCell(r, n) : false,
-                  onNotesClick: (field && field.mods && field.mods.notes) ? (() => addNoteToCell(tabKey, r.id, n)) : null,
+                  notesHas: hasNotesInCell(r, n),
+          initialsNotesHas: (field && field.mods && field.mods.initials) ? hasNotesForInitials(r, n) : false,
+onNotesClick: (field && field.mods && (field.mods.notes || field.mods.initials)) ? (() => addNoteToCell(tabKey, r.id, (field.mods && field.mods.initials) ? initialsKeyFor(n) : n, { labelField: n })) : null,
                   // base value change
-                  onChange: (val) => {
-                    const st = App.getState();
-                    const cur = (getRowSafe(tabKey, r.id, st) || r);
-                    const next = { id: cur.id, createdAt: cur.createdAt, updatedAt: new Date().toISOString(), archived: !!cur.archived, fields: Object.assign({}, cur.fields || {}) };
-                    const v = (App.FieldTypes.normalizeValue) ? App.FieldTypes.normalizeValue(tkey, val) : val;
-                    next.fields[n] = v;
-                    App.upsertRow(tabKey, next);
-                  },
+                  onChange: (val) => { updateCell(r.id, n, val); },
                   // corner addon (stored separately)
                   cornerValue: ((r.fields && r.fields[cornerKeyFor(n)]) != null ? (r.fields && r.fields[cornerKeyFor(n)]) : ""),
                   onCornerChange: ((field && field.mods && field.mods.corner) || tkey === "status") ? (cval) => {
@@ -1381,26 +3133,8 @@ function userDataView(state, tabKey, title, opts) {
                       App.upsertRow(tabKey, next);
                     });
                   } : undefined,
-                  // notes addon (log)
-                  notesHas: (function () {
-                    try { const log = readNotesLog((r.fields || {}), n); return Array.isArray(log) && log.length > 0; } catch (e) { return false; }
-                  })(),
-                  onNotesClick: (field && field.mods && field.mods.notes) ? () => {
-                    try {
-                      const st2 = App.getState();
-                      const cur2 = (getRowSafe(tabKey, r.id, st2) || r);
-                      const next2 = { id: cur2.id, createdAt: cur2.createdAt, updatedAt: new Date().toISOString(), archived: !!cur2.archived, fields: Object.assign({}, cur2.fields || {}) };
-
-                      const log = readNotesLog(next2.fields, n);
-                      openNotesModal(tabKey, n, log, function(add){
-                        if (!add) return;
-                        log.push({ ts: new Date().toISOString(), by: currentInitials(), text: add });
-                        writeNotesLog(next2.fields, n, log);
-                        App.upsertRow(tabKey, next2);
-                      });
-                      } catch (e) { console.error(e); }
-                  } : undefined
-                });}
+                });
+              }
 
               // fallback to text input
               const inp = el("input", { class: inputClass(), value: String(((r.fields && r.fields[n]) != null ? (r.fields && r.fields[n]) : "")) }, []);
@@ -1414,51 +3148,17 @@ function userDataView(state, tabKey, title, opts) {
               return inp;
             })()
           ]));
-        });
 
-        if (allowDelete) {
-          // DEV/PRODUCT: DONE + Ta bort
-          tr.appendChild(el("td", { style:"white-space:nowrap;text-align:right;" }, [
-            el("button", { class:"btn btn-small", type:"button", onclick: () => {
-              const ok = window.confirm("Klarmarkera (DONE) och arkivera raden?");
-              if (!ok) return;
-              try { App.archiveRow(tabKey, r.id); } catch(e) { console.error(e); }
-              rerender();
-            }}, ["DONE"]),
-            el("span", { style:"display:inline-block;width:8px;" }, [""]),
-            el("button", { class:"btn btn-small", type:"button", onclick: () => {
-              const ok = window.confirm("Ta bort raden permanent?");
-              if (!ok) return;
-              try {
-                const st = App.getState();
-                const list = Array.isArray(st.data && st.data[tabKey]) ? st.data[tabKey] : [];
-                st.data = st.data || {};
-                st.data[tabKey] = list.filter(x => x && x.id !== r.id);
-                App.commitState(st);
-              } catch(e) { console.error(e); }
-              rerender();
-            }}, ["Ta bort"])
-          ]));
-        } else if (routinesEditable) {
-          // ROUTINES admin: only Ta bort
-          tr.appendChild(el("td", { style:"white-space:nowrap;text-align:right;" }, [
-            el("button", { class:"btn btn-small", type:"button", onclick: () => {
-              const ok = window.confirm("Ta bort raden permanent?");
-              if (!ok) return;
-              try {
-                const st = App.getState();
-                const list = Array.isArray(st.data && st.data[tabKey]) ? st.data[tabKey] : [];
-                st.data = st.data || {};
-                st.data[tabKey] = list.filter(x => x && x.id !== r.id);
-                App.commitState(st);
-              } catch(e) { console.error(e); }
-              rerender();
-            }}, ["Ta bort"])
-          ]));
-        }
+  });
 
-        tbody.appendChild(tr);
-      });
+  if (_addActionsCol) {
+    tr.appendChild(el("td", { class:"cell-actions" }, [
+      renderRowActionsCell(tabKey, schema, r, (opts && opts.rowActions) ? opts.rowActions : null)
+    ]));
+  }
+
+  tbody.appendChild(tr);
+});
     }
 
     // re-render after commits
@@ -1473,455 +3173,131 @@ function userDataView(state, tabKey, title, opts) {
     rerender();
   }
 
-function todoView(state, tabKey, title) {
-    // VERSION 106: ensure ToDo view is not duplicated
+
+  // Backwards-compatible alias (call sites may still use userDataView)
+  function userDataView(state, tabKey, title, opts) {
+    // Delegate table rendering for selected tabs to TabCore (split out from this large file).
     try {
-      const host = document.getElementById("usp-view");
-      if (host) {
-        const olds = host.querySelectorAll(".todo-root");
-        olds.forEach(n => n.remove());
+      if (window.USP && window.USP.UI && window.USP.UI.TabCore && typeof window.USP.UI.TabCore.renderTab === "function") {
+        var t = String(tabKey || "").toLowerCase();
+        if (t === "dev" || t === "product" || t === "project" || t === "routines") {
+          window.USP.UI.TabCore.renderTab(state, tabKey, title, opts);
+          return;
+        }
       }
-    } catch(e) {}
+    } catch (e) {}
+    return dataTableView(state, tabKey, title, opts);
+  }
 
-  const views = (document && document.querySelectorAll) ? document.querySelectorAll("#usp-view") : [];
-  const view = views && views.length ? views[0] : byId("usp-view");
+
+function todoView(state) {
+  const tabKey = App.Tabs.TODO;
+  const title = "ToDo";
+
+  const view = byId("usp-view");
   if (!view) return;
-  if (_todoRenderedTick === _renderTick) return;
-  _todoRenderedTick = _renderTick;
 
-  try { (views || []).forEach(v => setHtml(v, "")); } catch (e) { setHtml(view, ""); }
+  const st0 = App.getState();
+  const session0 = (st0 && st0.session) ? st0.session : {};
 
-  ensureFixedTodoSchema(tabKey, state);
-  // housekeeping on week change
-  try { todoWeekHousekeeping(state); } catch (e) {}
+  // Ensure predictable defaults once per session (oförstörande)
+  if (!session0.__todoFilterInitDone) {
+    const st2 = (App.cloneState ? App.cloneState(st0) : JSON.parse(JSON.stringify(st0)));
+    st2.session = st2.session || {};
+    st2.session.__todoFilterInitDone = true;
+    if (!st2.session.todoFilterCat) st2.session.todoFilterCat = "Alla";
+    if (st2.session.todoOnlyMine == null) st2.session.todoOnlyMine = false;
+    App.commitState(st2);
+    return;
+  }
+
+  setHtml(view, "");
 
   const st = App.getState();
-  const schema = App.getSchema(tabKey, st);
-  const fields = sortFields(schema.fields || []);
-  const fieldNames = fields.map(f => String(f.name||"").trim()).filter(Boolean);
-
-  // Filters
-  const acting = (App.getActingUser ? App.getActingUser(st) : st.user) || {};
-  const ownerKey = String(acting.email || acting.id || "");
-
-  const session = (st.session = st.session || {});
+  const session = (st && st.session) ? st.session : {};
   const filterCat = String(session.todoFilterCat || "Alla");
   const onlyMine = !!session.todoOnlyMine;
-  const showLatest = !!session.todoShowLatest;
 
-  const now = new Date();
-  const weekNo = isoWeek(now);
-  const wr = weekRangeMondaySunday(now);
+  // Logged in initials (for Private rule in TableUI)
+  let meIni = "";
+  try {
+    const a = (App.getActingUser ? App.getActingUser(st) : (st.user || {})) || {};
+    meIni = computeInitials(a) || "";
+  } catch(e) {}
 
-  
+  const cats = ["Alla","Allmänt","Info","Kontor","Shopify B2C","Shopify B2B","Logistik","Privat"];
 
-  // ToDo kategori-filter (Alla + kategorier)
-  const todoCats = ["Allmänt","Info","Shopify-B2C","Shopify-B2B","Logistik","Privat"];
-  const filterOpts = ["Alla"].concat(todoCats);
-  const filterSelect = el("select", { class:"input", style:"width:17ch;min-width:17ch;max-width:17ch;", onchange: (ev) => {
-      const next = App.getState();
-      next.session = next.session || {};
-      next.session.todoFilterCat = String(ev.target.value || "Alla");
-      next.session.todoRecent = false;
-      App.commitState(next);
-    }}, filterOpts.map(v => el("option", { value: v, selected: String(v)===String(filterCat) ? "selected" : null }, [v])));
+  const filterSelect = el("select", {
+    onchange: (ev) => {
+      const v = String(ev.target.value || "Alla");
+      const s0 = App.getState();
+      const s2 = (App.cloneState ? App.cloneState(s0) : JSON.parse(JSON.stringify(s0)));
+      s2.session = s2.session || {};
+      s2.session.todoFilterCat = v;
+      s2.session.todoOnlyMine = false; // filter styr
+      App.commitState(s2);
+    }
+  }, cats.map(v => el("option", { value: v }, [v])));
+  try { filterSelect.value = String(filterCat || "Alla"); } catch(e) {}
 
   const filterRow = el("div", { style:"display:flex;align-items:center;gap:12px;margin:10px 0 18px 0;" }, [
     el("div", { class:"muted", style:"font-weight:600;" }, ["Filter:"]),
     filterSelect
   ]);
-// Header (week info left, actions right)
+
+  const btnMineClass = btnClass("secondary") + (onlyMine ? " btn-mine-active" : "");
   const heroButtons = [
-    el("button", { class: btnClass("secondary"), type:"button", onclick: () => {
-      const st = App.getState();
-      const st2 = (App.cloneState ? App.cloneState(st) : JSON.parse(JSON.stringify(st)));
-      st2.session = st2.session || {};
-      st2.session.todoRecent = true;
-      // In recent mode, use Alla by default
-      st2.session.todoFilterCat = "Alla";
-      App.commitState(st2);
-    }}, ["Senaste"]),
-    el("button", { class: btnClass("secondary"), type:"button", onclick: () => {
-      const next = App.getState();
-      next.session = next.session || {};
-      next.session.todoOnlyMine = !next.session.todoOnlyMine;
-      App.commitState(next);
+    el("button", { class: btnMineClass, type:"button", onclick: () => {
+      const s0 = App.getState();
+      const s2 = (App.cloneState ? App.cloneState(s0) : JSON.parse(JSON.stringify(s0)));
+      s2.session = s2.session || {};
+      s2.session.todoOnlyMine = !onlyMine;
+      App.commitState(s2);
     }}, ["Mina ToDo"]),
-    el("button", { class: btnClass("primary"), type:"button", onclick: () => { openNewTodoModal(tabKey, App.getState()); } }, ["Ny ToDo"]),
+    el("button", { class: btnClass("primary"), type:"button", onclick: () => {
+      openRowModal(tabKey, { todoNew: true, title: "Ny ToDo" });
+    }}, ["Ny ToDo"]),
     el("button", { class: btnClass("secondary"), type:"button", onclick: () => {
       openArchiveModal(App.getState(), tabKey, title);
     }}, ["Arkiv"])
   ];
 
+  // Keep the week badge like before (pure UI)
+  let weekNo = "";
+  let wr = null;
+  try {
+    weekNo = String(isoWeekNumber(new Date()));
+    wr = weekRange(new Date());
+  } catch(e) {}
+
   const headerLeft = el("div", { style:"display:flex;flex-direction:column;gap:6px;" }, [
     el("div", { style:"display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;" }, [
       el("div", { class:"hero-title", style:"font-size:40px;line-height:1.05;font-weight:800;" }, [title]),
-      el("div", { class:"hero-subtitle", style:"font-size:20px;font-weight:700;" }, ["Vecka " + String(weekNo)])
-    ]),
-    el("div", { class:"hint", style:"font-size:12px;margin-left:0;" }, [`${wr.from} – ${wr.to}`])
-  ]);
+      weekNo ? el("div", { class:"hero-subtitle", style:"font-size:20px;font-weight:700;" }, ["Vecka " + weekNo]) : null
+    ].filter(Boolean)),
+    (wr && wr.from && wr.to) ? el("div", { class:"hint", style:"font-size:12px;margin-left:0;" }, [`${wr.from} – ${wr.to}`]) : null
+  ].filter(Boolean));
 
-  const headerRight = el("div", { style:"display:flex;gap:12px;flex-wrap:wrap;justify-content:flex-end;margin-left:auto;" }, heroButtons);
-
-  const header = el("div", { class:"hero", style:"display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap;" }, [
+  const header = el("div", { class:"hero", style:"display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap;" }, [
     headerLeft,
-    headerRight
+    el("div", { style:"display:flex;gap:10px;align-items:center;flex-wrap:wrap;" }, heroButtons)
   ]);
 
   view.appendChild(header);
   view.appendChild(filterRow);
 
-  const table = el("table", { class:"table todo-table" }, []);
-  table.appendChild(el("thead", {}, [
-    el("tr", {}, [
-      ...fieldNames.map(n => el("th", { style: (n==="Kategori" ? "width:17ch;" : (n==="Klart" ? "width:12ch;" : null)) }, [n])),
-      el("th", { style:"text-align:right;width:8ch;" }, [""])
-    ])
-  ]));
-
-  const tbody = el("tbody", {}, []);
-  table.appendChild(tbody);
-  view.appendChild(table);
-
-  function filterRows(allRows) {
-    let rows = (allRows || []).filter(r => r && !r.archived);
-    const isNew = (r) => !!(r && r.meta && r.meta._new);
-
-    // Privacy: Privat only visible to owner
-    rows = rows.filter(r => {
-      const cat = String((r.fields && r.fields["Kategori"]) || "");
-      if (cat !== "Privat") return true;
-      return String((r.meta && r.meta.owner) || "") === ownerKey;
-    });
-
-    // Category filter: if filter != "Alla", show only matching Kategori
-    if (filterCat && filterCat !== "Alla") {
-      rows = rows.filter(r => String((r.fields && r.fields["Kategori"]) || "") === filterCat);
-    } else {
-      // "Alla": include everything except other people's Privat (already handled above)
-      rows = rows.filter(r => String((r.fields && r.fields["Kategori"]) || "") !== "Privat" || String((r.meta && r.meta.owner)||"")===ownerKey);
-    }
-
-    if (onlyMine) {
-      const myIni = String(acting.initials || "").trim();
-      rows = rows.filter(r => {
-        const ownerOk = String((r.meta && r.meta.owner) || "") === ownerKey;
-        const resp = String((r.fields && r.fields[initialsKeyFor("Beskrivning")]) || "").trim();
-        const respOk = !!myIni && resp === myIni;
-        return ownerOk || respOk;
-      });
-    }
-
-    if (showLatest) {
-      const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-      const yesterday = new Date(today); yesterday.setDate(today.getDate()-1);
-      rows = rows.filter(r => {
-        const ts = (r.updatedAt || r.createdAt || "");
-        const d = new Date(String(ts));
-        if (isNaN(d.getTime())) return false;
-        const dd = new Date(d.getFullYear(), d.getMonth(), d.getDate());
-        return dd.getTime() === today.getTime() || dd.getTime() === yesterday.getTime();
-      });
-    }
-
-    return rows;
+  // Render table via TableUI (single source of truth for row selection + filtering)
+  try{
+    const t = (window.USP && USP.UI && USP.UI.TableUI && typeof USP.UI.TableUI.renderFixedTable === "function")
+      ? USP.UI.TableUI.renderFixedTable(App.getState(), tabKey, title)
+      : null;
+    if (t) view.appendChild(t);
+    else dataTableView(App.getState(), tabKey, title, { append:true, noHero:true });
+  }catch(e){
+    try{ console.error("todoView render table failed", e); }catch(_){}
   }
-
-  // VERSION 210: Kategori dropdown handled directly in ToDo view (independent of FieldTypes)
-  const TODO_CATEGORIES = ["Allmänt","Info","Shopify-B2C","Shopify-B2B","Logistik","Privat"];
-
-  function renderTodoCategoryCell(row, tabKey, onPick) {
-    const value = String((row && row.fields && row.fields["Kategori"]) || "");
-    const label = value || "Välj kategori";
-    const wrap = el("div", { style:"position:relative;display:inline-block;overflow:hidden;width:17ch;min-width:17ch;max-width:17ch;" }, []);
-
-    const disp = el("div", {
-      class:"input",
-      style:"display:flex;align-items:center;justify-content:space-between;gap:8px;cursor:pointer;user-select:none;width:100%;padding-right:26px;"
-    }, [ label ]);
-
-    const caret = el("span", { style:"position:absolute;right:8px;top:50%;transform:translateY(-50%);pointer-events:none;opacity:0.7;" }, ["▾"]);
-
-    const sel = el("select", {
-      style:"position:absolute;inset:0;opacity:0;cursor:pointer;width:100%;height:100%;pointer-events:auto;",
-      title:"Kategori"
-    }, [
-      el("option", { value:"" }, [""]),
-      ...TODO_CATEGORIES.map(v => el("option", { value:v }, [v]))
-    ]);
-    sel.value = value;
-
-    sel.addEventListener("change", function(){
-      const v = sel.value;
-      if (typeof onPick === "function") onPick(v);
-    });
-
-    // clicking on display should open select dropdown (native)
-    disp.addEventListener("click", function(){
-      try { sel.focus(); sel.click(); } catch(e) {}
-    });
-
-    wrap.appendChild(disp);
-    wrap.appendChild(caret);
-    wrap.appendChild(sel);
-    return wrap;
-  }
-
-  // VERSION 214: New ToDo uses a modal (avoids filter/category confusion)
-  let _todoNewModalOpen = false;
-
-  function openNewTodoModal(tabKey, state) {
-    closeAnyModal();
-    if (_todoNewModalOpen) return;
-    _todoNewModalOpen = true;
-
-    const st0 = state || App.getState();
-    const acting = (App.getActingUser ? App.getActingUser(st0) : (st0 && st0.session && st0.session.actingUser) || (st0 && st0.session && st0.session.user) || {}) || {};
-    const ownerKey = String(acting.email || acting.id || "");
-    const initDefault = String((acting.initials || "").trim() || "--");
-
-    const model = { kategori:"", beskrivning:"", klart:"", initials:initDefault };
-
-    const overlay = el("div", { class:"usp-modal-overlay" }, []);
-    const backdrop = el("div", { class:"usp-modal-backdrop" }, []);
-    const modal = el("div", { class:"usp-modal" }, []);
-
-    function close() {
-      _todoNewModalOpen = false;
-      try { overlay.remove(); } catch(e) {}
-    }
-
-    function save() {
-      try {
-        const k = (App.Tabs && App.Tabs.TODO) ? App.Tabs.TODO : "todo";
-        // Validate required fields
-        if (!String(model.kategori||"").trim()) { alert("Välj Kategori"); return; }
-        if (!String(model.beskrivning||"").trim()) { alert("Fyll i Beskrivning"); return; }
-        const base = App.blankRow ? App.blankRow(k) : { id:null, fields:{}, meta:{} };
-        base.fields = base.fields || {};
-        base.meta = Object.assign({}, base.meta || {}, { owner: ownerKey, green: false });
-
-        base.fields["Kategori"] = String(model.kategori || "");
-        base.fields["Beskrivning"] = String(model.beskrivning || "");
-        base.fields["Klart"] = String(model.klart || "");
-
-        const ik = initialsKeyFor("Beskrivning");
-        base.fields[ik] = String(model.initials || "--").trim() || "--";
-
-        App.upsertRow(k, base);
-
-        // After save: set filter to saved category and show only that
-        const st1 = App.getState();
-        const chosen = String(model.kategori || "");
-        if (chosen && st1 && st1.session) {
-          const st2 = (App.cloneState ? App.cloneState(st1) : JSON.parse(JSON.stringify(st1)));
-          st2.session = st2.session || {};
-          st2.session.todoFilterCat = chosen;
-            st2.session.todoRecent = false;
-          App.commitState(st2);
-        }
-
-        close();
-      } catch (e) {
-        console.error("Save ToDo failed", e);
-      }
-    }
-
-    const head = el("div", { class:"usp-modal-head" }, [
-      el("div", { class:"usp-modal-title" }, ["Ny ToDo"]),
-      el("div", { class:"usp-modal-subtitle" }, ["Fyll i Kategori, Beskrivning och Klart, och spara."])
-    ]);
-
-    // Kategori (clickable value opens dropdown)
-    const catLabel = el("div", { class:"usp-modal-label" }, ["Kategori"]);
-    const catCell = renderTodoCategoryCell({ fields:{ "Kategori": model.kategori } }, tabKey, (v) => {
-      model.kategori = v;
-      const vEl = catCell.querySelector(".input");
-      if (vEl) vEl.textContent = v || "Välj kategori";
-    });
-    const vEl0 = catCell.querySelector(".input");
-    if (vEl0) vEl0.textContent = "Välj kategori";
-    const catField = el("div", { class:"usp-modal-field" }, [catLabel, catCell]);
-
-    // Beskrivning + initials
-    const descLabel = el("div", { class:"usp-modal-label" }, ["Beskrivning"]);
-    const descInput = el("input", { class:"usp-modal-input", type:"text", value:model.beskrivning }, []);
-    descInput.addEventListener("input", () => { model.beskrivning = descInput.value; });
-
-    const iniBtn = el("button", { class:"act-initials", type:"button", title:"Initialer" }, [model.initials]);
-    iniBtn.addEventListener("click", (e) => {
-      e.preventDefault(); e.stopPropagation();
-      const pick = promptPickInitials(model.initials);
-      if (pick === null) return;
-      model.initials = pick;
-      iniBtn.textContent = pick;
-    });
-
-    const descWrap = el("div", { class:"usp-modal-descwrap" }, [descInput, iniBtn]);
-    const descField = el("div", { class:"usp-modal-field" }, [descLabel, descWrap]);
-
-    // Klart (date)
-    const dateLabel = el("div", { class:"usp-modal-label" }, ["Klart"]);
-    const dateInput = el("input", { class:"usp-modal-input usp-modal-date", type:"date", value:model.klart }, []);
-    dateInput.addEventListener("change", () => { model.klart = dateInput.value; });
-    const dateField = el("div", { class:"usp-modal-field" }, [dateLabel, dateInput]);
-
-    const fields = el("div", { class:"usp-modal-fields" }, [catField, descField, dateField]);
-
-    const btnCancel = el("button", { class: btnClass("secondary"), type:"button" }, ["Cancel"]);
-    btnCancel.addEventListener("click", (e) => { e.preventDefault(); close(); });
-
-    const btnSave = el("button", { class: btnClass("primary"), type:"button" }, ["Save"]);
-    btnSave.addEventListener("click", (e) => { e.preventDefault(); save(); });
-
-    const btns = el("div", { class:"usp-modal-actions" }, [btnCancel, btnSave]);
-
-    modal.appendChild(head);
-    modal.appendChild(fields);
-    modal.appendChild(btns);
-
-    overlay.appendChild(backdrop);
-    overlay.appendChild(modal);
-
-    backdrop.addEventListener("click", () => close());
-    document.addEventListener("keydown", function esc(e){
-      if (!_todoNewModalOpen) { document.removeEventListener("keydown", esc); return; }
-      if (e.key === "Escape") { e.preventDefault(); close(); document.removeEventListener("keydown", esc); }
-    });
-
-    document.body.appendChild(overlay);
-    try { descInput.focus(); } catch(e) {}
-  }
-
-
-
-
-  function rerender() {
-    setHtml(tbody, "");
-    const freshRows = filterRows(App.listRows(tabKey, App.getState()) || []);
-    freshRows.forEach(r => {
-      const tr = el("tr", {}, []);
-      if (r.meta && r.meta.green) tr.classList.add("usp-row-green");
-
-      fieldNames.forEach(n => {
-        const td = el("td", {}, []);
-        if (n === "Start" || n === "Slut") td.style.textAlign = "center";
-        // Right click on Kategori toggles green row
-        if (n === "Kategori") {
-          const catEl = renderProjectCategoryCell(r, (val) => {
-            const st3 = App.getState();
-            const cur3 = getRowSafe(tabKey, r.id, st3) || r;
-            const next3 = Object.assign({}, cur3, { updatedAt: new Date().toISOString(), fields: Object.assign({}, cur3.fields||{}) });
-            next3.fields["Kategori"] = val;
-            App.upsertRow(tabKey, next3);
-          });
-          td.appendChild(catEl);
-          tr.appendChild(td);
-          return;
-        }
-
-
-        const field = (fields || []).find(x => String(x.name || "").trim() === n) || { name: n, type: "text", mods: {} };
-        const tkey = (App.FieldTypes && App.FieldTypes.normalizeType) ? App.FieldTypes.normalizeType(field.type) : String(field.type || "text");
-
-        const cellVal = ((r.fields && r.fields[n]) != null ? (r.fields && r.fields[n]) : "");
-        const overdue = (tkey === "date") && isOverdueDate(cellVal);
-
-
-        const editor = (App.FieldTypes && typeof App.FieldTypes.renderEditor === "function")
-          ? App.FieldTypes.renderEditor({
-              baseType: tkey,
-              mods: Object.assign({}, field.mods||{}, overdue ? { overdue:true } : {}),
-              overdue,
-              value: ((r.fields && r.fields[n]) != null ? (r.fields && r.fields[n]) : ""),
-              disabled: false,
-              notesHas: (field && field.mods && field.mods.notes) ? hasNotesInCell(r, n) : false,
-              onNotesClick: (field && field.mods && field.mods.notes) ? (() => addNoteToCell(tabKey, r.id, n)) : null,
-              onChange: (val) => {
-                const st3 = App.getState();
-                const cur3 = getRowSafe(tabKey, r.id, st3) || r;
-                const next3 = Object.assign({}, cur3, { updatedAt: new Date().toISOString(), fields: Object.assign({}, cur3.fields||{}) });
-                const v = (App.FieldTypes.normalizeValue) ? App.FieldTypes.normalizeValue(tkey, val) : val;
-                next3.fields[n] = v;
-                App.upsertRow(tabKey, next3);
-              },
-              initialsValue: ((r.fields && r.fields[initialsKeyFor(n)]) != null ? (r.fields && r.fields[initialsKeyFor(n)]) : "--"),
-              onInitialsClick: (field.mods && field.mods.initials) ? () => {
-                const curIni = ((r.fields && r.fields[initialsKeyFor(n)]) != null ? (r.fields && r.fields[initialsKeyFor(n)]) : "--");
-                const pick = promptPickInitials(curIni);
-                if (pick === null) return;
-                const st4 = App.getState();
-                const cur4 = getRowSafe(tabKey, r.id, st4) || r;
-                const next4 = Object.assign({}, cur4, { updatedAt: new Date().toISOString(), fields: Object.assign({}, cur4.fields||{}) });
-                next4.fields[initialsKeyFor(n)] = String(pick || "--");
-                App.upsertRow(tabKey, next4);
-              } : undefined,
-              notesHas: (function () {
-                try { const log = readNotesLog((r.fields || {}), n); return Array.isArray(log) && log.length > 0; } catch (e) { return false; }
-              })(),
-              onNotesClick: (field.mods && field.mods.notes) ? () => {
-                try {
-                  const st5 = App.getState();
-                  const cur5 = getRowSafe(tabKey, r.id, st5) || r;
-                  const next5 = Object.assign({}, cur5, { updatedAt: new Date().toISOString(), fields: Object.assign({}, cur5.fields||{}) });
-                  const log = readNotesLog(next5.fields, n);
-                  const rowName = rowDisplayNameForNotes(tabKey, cur5, st5);
-                  openNotesModal(tabKey, n, log, function(add){
-                    if (!add) return;
-                    log.push({ ts: new Date().toISOString(), by: currentInitials(), text: add });
-                    writeNotesLog(next5.fields, n, log);
-                    App.upsertRow(tabKey, next5);
-                  });
-                  } catch (e) { console.warn(e); }
-              } : undefined,
-            })
-          : el("div", {}, [String(((r.fields && r.fields[n]) != null ? (r.fields && r.fields[n]) : ""))]);
-
-        td.appendChild(editor);
-        tr.appendChild(td);
-      });
-
-      // Delete button
-      const tdDel = el("td", { style:"white-space:nowrap;" }, []);
-      tdDel.appendChild(el("button", { class: btnClass("secondary"), type:"button", onclick: () => {
-        const ok = window.confirm("Ta bort raden permanent?");
-        if (!ok) return;
-        // delete by filtering list and committing
-        const stDel = App.getState();
-        const next = (function(){ try { return JSON.parse(JSON.stringify(stDel)); } catch(e) { return Object.assign({}, stDel); } })();
-        next.data = next.data || {};
-        next.data[tabKey] = (App.listRows(tabKey, stDel) || []).filter(x => !(x && x.id === r.id));
-        App.commitState(next);
-      }}, ["Ta bort"]));
-      tr.appendChild(tdDel);
-
-      // Right-click row toggles green highlight (ToDo)
-      try {
-        const isGreen = !!(r && r.meta && r.meta.green);
-        if (isGreen) tr.classList.add("row-green");
-        tr.addEventListener("contextmenu", function(e){
-          e.preventDefault();
-          const st = App.getState();
-          const list = Array.isArray(st.data && st.data[tabKey]) ? st.data[tabKey] : [];
-          const nextList = list.map(x => {
-            if (!x || x.id !== r.id) return x;
-            const meta = Object.assign({}, x.meta || {});
-            meta.green = !meta.green;
-            return Object.assign({}, x, { meta, updatedAt: new Date().toISOString() });
-          });
-          const next = (function(){ try { return JSON.parse(JSON.stringify(st)); } catch(e2) { return Object.assign({}, st); } })();
-          next.data = next.data || {};
-          next.data[tabKey] = nextList;
-          App.commitState(next);
-        });
-      } catch(e) {}
-
-      tbody.appendChild(tr);
-    });
-  }
-
-  rerender();
 }
+
 
   // ===========================
   // Projekt view (fixed table + modal add)
@@ -1971,450 +3347,15 @@ function todoView(state, tabKey, title) {
 
   let _projectNewModalOpen = false;
   function openNewProjectModal(tabKey, state) {
-    if (_projectNewModalOpen) return;
-    _projectNewModalOpen = true;
-
-    const st0 = state || App.getState();
-    const acting = (App.getActingUser ? App.getActingUser(st0) : (st0 && st0.session && st0.session.actingUser) || (st0 && st0.session && st0.session.user) || {}) || {};
-    const ownerKey = String(acting.email || acting.id || "");
-    const initDefault = String((acting.initials || "").trim() || "--");
-
-    const model = {
-      projektnamn:"",
-      projektnamnInit:initDefault,
-      projektnamnNotes:[],
-      kategori:"",
-      start:"",
-      aktuell:"",
-      aktuellInit:initDefault,
-      aktuellNotes:[],
-      nasta:"",
-      nastaInit:initDefault,
-      nastaNotes:[],
-      kommande:"",
-      kommandeInit:initDefault,
-      kommandeNotes:[],
-      slut:""
-    };
-
-    const overlay = el("div", { class:"usp-modal-overlay" }, []);
-    const backdrop = el("div", { class:"usp-modal-backdrop" }, []);
-    const modal = el("div", { class:"usp-modal" }, []);
-
-    function close() {
-      _projectNewModalOpen = false;
-      try { overlay.remove(); } catch(e) {}
-    }
-
-    function editNotes(fieldLabel, notesArrRefSetter, currentArr) {
-      openNotesModal(tabKey, fieldLabel, (currentArr || []), function(t){
-        if (!t) return;
-      const ts = new Date().toISOString();
-      const entry = { ts, by: (acting && acting.initials) ? acting.initials : "", text: t };
-      const next = (currentArr || []).concat([entry]);
-      notesArrRefSetter(next);
-      });
-    }
-
-    function save() {
-      try {
-        const k = tabKey || (App.Tabs && App.Tabs.PROJECT ? App.Tabs.PROJECT : "project");
-        const base = App.blankRow ? App.blankRow(k) : { id:null, fields:{}, meta:{} };
-        base.fields = base.fields || {};
-        base.meta = Object.assign({}, base.meta || {}, { owner: ownerKey });
-
-        base.fields["Projektnamn"] = String(model.projektnamn || "");
-        base.fields["Kategori"] = String(model.kategori || "");
-        base.fields["Start"] = String(model.start || "");
-        base.fields["Aktuell"] = String(model.aktuell || "");
-        base.fields["Nästa"] = String(model.nasta || "");
-        base.fields["Kommande"] = String(model.kommande || "");
-        base.fields["Slut"] = String(model.slut || "");
-
-        base.fields[initialsKeyFor("Projektnamn")] = String(model.projektnamnInit || "--");
-        base.fields[initialsKeyFor("Aktuell")] = String(model.aktuellInit || "--");
-        base.fields[initialsKeyFor("Nästa")] = String(model.nastaInit || "--");
-        base.fields[initialsKeyFor("Kommande")] = String(model.kommandeInit || "--");
-
-        base.fields[notesKeyFor("Projektnamn")] = model.projektnamnNotes || [];
-        base.fields[notesKeyFor("Aktuell")] = model.aktuellNotes || [];
-        base.fields[notesKeyFor("Nästa")] = model.nastaNotes || [];
-        base.fields[notesKeyFor("Kommande")] = model.kommandeNotes || [];
-
-        App.upsertRow(k, base);
-        close();
-      } catch (e) {
-        console.error("Save Project failed", e);
-      }
-    }
-
-    const head = el("div", { class:"usp-modal-head" }, [
-      el("div", { class:"usp-modal-title" }, ["Nytt projekt"]),
-      el("div", { class:"usp-modal-subtitle" }, ["Fyll i uppgifter och spara."])
-    ]);
-
-    function fieldRow(label, control) {
-      return el("div", { class:"usp-modal-field" }, [
-        el("div", { class:"usp-modal-label" }, [label]),
-        control
-      ]);
-    }
-
-    // Projektnamn + initials (click initials to notes)
-    const pnInput = el("input", { class:"usp-modal-input", type:"text", value:model.projektnamn }, []);
-    pnInput.addEventListener("input", () => { model.projektnamn = pnInput.value; });
-
-    const pnIni = el("button", { class:"act-initials", type:"button", title:"Initialer / Notes" }, [model.projektnamnInit]);
-    function refreshPnIni() {
-      pnIni.textContent = model.projektnamnInit || "--";
-      pnIni.style.color = (model.projektnamnNotes && model.projektnamnNotes.length) ? "#0b3d91" : "";
-    }
-    pnIni.addEventListener("click", (e) => {
-      e.preventDefault(); e.stopPropagation();
-      // click initials opens notes; shift-click changes initials
-      if (e.shiftKey) {
-        const pick = promptPickInitials(model.projektnamnInit);
-        if (pick === null) return;
-        model.projektnamnInit = pick;
-        refreshPnIni();
-        return;
-      }
-      editNotes("Projektnamn", (arr)=>{ model.projektnamnNotes = arr; refreshPnIni(); }, model.projektnamnNotes);
-    });
-    refreshPnIni();
-
-    const pnWrap = el("div", { class:"usp-modal-descwrap" }, [pnInput, pnIni]);
-    const pnField = fieldRow("Projektnamn", pnWrap);
-
-    // Kategori dropdown
-    const catCell = renderProjectCategoryCell({ fields:{ "Kategori": model.kategori } }, tabKey, (v)=>{ model.kategori=v; });
-    const catField = fieldRow("Kategori", catCell);
-
-    // Start date
-    const startInput = el("input", { class:"usp-modal-input usp-modal-date", type:"date", value:model.start }, []);
-    startInput.addEventListener("change", ()=>{ model.start = startInput.value; });
-    const startField = fieldRow("Start", startInput);
-
-    // Aktuell + initials + corner marker (click initials opens notes; shift-click changes initials)
-    const aInput = el("input", { class:"usp-modal-input", type:"text", value:model.aktuell }, []);
-    aInput.addEventListener("input", ()=>{ model.aktuell = aInput.value; });
-    const aIni = el("button", { class:"act-initials has-corner", type:"button", title:"Initialer / Notes" }, [model.aktuellInit]);
-    function refreshAIni() {
-      aIni.textContent = model.aktuellInit || "--";
-      aIni.style.color = (model.aktuellNotes && model.aktuellNotes.length) ? "#0b3d91" : "";
-    }
-    aIni.addEventListener("click", (e)=>{
-      e.preventDefault(); e.stopPropagation();
-      if (e.shiftKey) {
-        const pick = promptPickInitials(model.aktuellInit);
-        if (pick === null) return;
-        model.aktuellInit = pick;
-        refreshAIni();
-        return;
-      }
-      editNotes("Aktuell", (arr)=>{ model.aktuellNotes = arr; refreshAIni(); }, model.aktuellNotes);
-    });
-    refreshAIni();
-    const aWrap = el("div", { class:"usp-modal-descwrap" }, [aInput, aIni]);
-    const aField = fieldRow("Aktuell", aWrap);
-
-    // Nästa
-    const nInput = el("input", { class:"usp-modal-input", type:"text", value:model.nasta }, []);
-    nInput.addEventListener("input", ()=>{ model.nasta = nInput.value; });
-    const nIni = el("button", { class:"act-initials", type:"button", title:"Initialer / Notes" }, [model.nastaInit]);
-    function refreshNIni() {
-      nIni.textContent = model.nastaInit || "--";
-      nIni.style.color = (model.nastaNotes && model.nastaNotes.length) ? "#0b3d91" : "";
-    }
-    nIni.addEventListener("click", (e)=>{
-      e.preventDefault(); e.stopPropagation();
-      if (e.shiftKey) {
-        const pick = promptPickInitials(model.nastaInit);
-        if (pick === null) return;
-        model.nastaInit = pick;
-        refreshNIni();
-        return;
-      }
-      editNotes("Nästa", (arr)=>{ model.nastaNotes = arr; refreshNIni(); }, model.nastaNotes);
-    });
-    refreshNIni();
-    const nWrap = el("div", { class:"usp-modal-descwrap" }, [nInput, nIni]);
-    const nField = fieldRow("Nästa", nWrap);
-
-    // Kommande
-    const kInput = el("input", { class:"usp-modal-input", type:"text", value:model.kommande }, []);
-    kInput.addEventListener("input", ()=>{ model.kommande = kInput.value; });
-    const kIni = el("button", { class:"act-initials", type:"button", title:"Initialer / Notes" }, [model.kommandeInit]);
-    function refreshKIni() {
-      kIni.textContent = model.kommandeInit || "--";
-      kIni.style.color = (model.kommandeNotes && model.kommandeNotes.length) ? "#0b3d91" : "";
-    }
-    kIni.addEventListener("click", (e)=>{
-      e.preventDefault(); e.stopPropagation();
-      if (e.shiftKey) {
-        const pick = promptPickInitials(model.kommandeInit);
-        if (pick === null) return;
-        model.kommandeInit = pick;
-        refreshKIni();
-        return;
-      }
-      editNotes("Kommande", (arr)=>{ model.kommandeNotes = arr; refreshKIni(); }, model.kommandeNotes);
-    });
-    refreshKIni();
-    const kWrap = el("div", { class:"usp-modal-descwrap" }, [kInput, kIni]);
-    const kField = fieldRow("Kommande", kWrap);
-
-    // Slut date
-    const slutInput = el("input", { class:"usp-modal-input usp-modal-date", type:"date", value:model.slut }, []);
-    slutInput.addEventListener("change", ()=>{ model.slut = slutInput.value; });
-    const slutField = fieldRow("Slut", slutInput);
-
-    const fields = el("div", { class:"usp-modal-fields" }, [pnField, catField, startField, aField, nField, kField, slutField]);
-
-    const btnCancel = el("button", { class: btnClass("secondary"), type:"button" }, ["Cancel"]);
-    btnCancel.addEventListener("click", (e)=>{ e.preventDefault(); close(); });
-
-    const btnSave = el("button", { class: btnClass("primary"), type:"button" }, ["Save"]);
-    btnSave.addEventListener("click", (e)=>{ e.preventDefault(); save(); });
-
-    const btns = el("div", { class:"usp-modal-actions" }, [btnCancel, btnSave]);
-
-    modal.appendChild(head);
-    modal.appendChild(fields);
-    modal.appendChild(btns);
-
-    overlay.appendChild(backdrop);
-    overlay.appendChild(modal);
-
-    backdrop.addEventListener("click", ()=>close());
-    document.addEventListener("keydown", function esc(e){
-      if (!_projectNewModalOpen) { document.removeEventListener("keydown", esc); return; }
-      if (e.key === "Escape") { e.preventDefault(); close(); document.removeEventListener("keydown", esc); }
-    });
-
-    document.body.appendChild(overlay);
-    try { pnInput.focus(); } catch(e) {}
+    // R3: open modal for new Project row
+    const k = (App.Tabs && App.Tabs.PROJECT) ? App.Tabs.PROJECT : (tabKey || "project");
   }
 
   function projectView(state, tabKey, title) {
-
-    // VERSION 230: Kategori i tabellen visas som klickbar text (ej synlig dropdown)
-    const PROJECT_CATEGORIES = ["kundprojekt","volymprojekt","samarbetsprojekt"];
-
-    function renderProjectCategoryCell(row, onPick) {
-      const value = String((row && row.fields && row.fields["Kategori"]) || "");
-      const label = value || "Välj";
-      const wrap = el("div", { style:"position:relative;display:inline-block;overflow:hidden;width:17ch;min-width:17ch;max-width:17ch;" }, []);
-
-      const disp = el("div", {
-        class:"input",
-        style:"display:flex;align-items:center;justify-content:space-between;gap:8px;cursor:pointer;user-select:none;width:100%;padding-right:26px;"
-      }, [ label ]);
-
-      const caret = el("span", { style:"position:absolute;right:8px;top:50%;transform:translateY(-50%);pointer-events:none;opacity:0.7;" }, ["▾"]);
-
-      const sel = el("select", {
-        style:"position:absolute;inset:0;opacity:0;cursor:pointer;width:100%;height:100%;pointer-events:auto;",
-        title:"Kategori"
-      }, [
-        el("option", { value:"" }, [""]),
-        ...PROJECT_CATEGORIES.map(v => el("option", { value:v }, [v]))
-      ]);
-      sel.value = value;
-
-      sel.addEventListener("change", function(){
-        const v = sel.value;
-        if (typeof onPick === "function") onPick(v);
-        // update display text
-        disp.textContent = v || "Välj";
-        disp.appendChild(caret);
-      });
-
-      disp.addEventListener("click", function(){
-        try { sel.focus(); sel.click(); } catch(e) {}
-      });
-
-      wrap.appendChild(disp);
-      wrap.appendChild(caret);
-      wrap.appendChild(sel);
-      return wrap;
-    }
-
-
-    ensureFixedProjectSchema(tabKey, state);
-
-    const view = byId("usp-view");
-    if (!view) return;
-    setHtml(view, "");
-
-    const heroButtons = [];
-    heroButtons.push(el("button", { class: btnClass("primary"), type:"button", onclick: () => openNewProjectModal(tabKey, App.getState()) }, ["Nytt projekt"]));
-
-    // Optional: Arkiv viewer
-    heroButtons.push(el("button", { class: btnClass("secondary"), type:"button", onclick: () => {
-      const st = App.getState();
-      const entries = (st && st.data && st.data[projectArchiveKey()]) ? st.data[projectArchiveKey()] : [];
-      const txt = entries && entries.length ? entries.map(e => (e.ts||"") + " " + (e.projektnamn||"") + " — " + (e.text||"")).join("\n") : "(tomt)";
-      alert("Projekt-arkiv\n\n" + txt);
-    }}, ["Arkiv"]));
-
-    view.appendChild(hero(title || "Projekt", "Projektlista", heroButtons));
-
-    const schema = App.getSchema(tabKey, state) || fixedProjectSchema();
-    const rows = App.listRows(tabKey, state) || [];
-    const fieldNames = schema.fields.map(f => f.name);
-
-    const table = el("table", { class:"grid" }, []);
-    const thead = el("thead", {}, []);
-    const htr = el("tr", {}, [
-      ...fieldNames.map(n => el("th", { style: (n==="Kategori" ? "width:17ch;" : (n==="Start"||n==="Slut" ? "width:15ch;" : null)) }, [n])),
-      el("th", { style:"text-align:right;white-space:nowrap;" }, [""])
-    ]);
-    thead.appendChild(htr);
-    table.appendChild(thead);
-
-    const tbody = el("tbody", {}, []);
-
-    function onNotesClick(rowId, fieldName) {
-      const st = App.getState();
-      const row = getRowSafe(tabKey, rowId, st);
-      if (!row) return;
-      const fields = Object.assign({}, row.fields || {});
-      const existing = readNotesLog(fields, fieldName);
-      openNotesModal(tabKey, fieldName, existing, function(t){
-        if (!t) return;
-        const byIni = (App.getActingUser ? ((App.getActingUser(st).initials)||"") : "");
-        const nextLog = existing.concat([{ ts: new Date().toISOString(), by: byIni, text: t }]);
-        writeNotesLog(fields, fieldName, nextLog);
-        const nextRow = Object.assign({}, row, { fields, updatedAt: new Date().toISOString() });
-        App.upsertRow(tabKey, nextRow);
-      });
-      }
-
-    function hasNotesInCell(row, fieldName) {
-      const log = readNotesLog(row.fields || {}, fieldName);
-      return log && log.length > 0;
-    }
-
-    function renderRow(r) {
-      const tr = el("tr", {}, []);
-      fieldNames.forEach((n) => {
-        const td = el("td", {}, []);
-        if (n === "Start" || n === "Slut") td.style.textAlign = "center";
-
-        if (n === "Kategori") {
-          td.appendChild(renderProjectCategoryCell(r, tabKey, (val) => {
-            const st = App.getState();
-            const cur = getRowSafe(tabKey, r.id, st) || r;
-            const next = Object.assign({}, cur, { updatedAt: new Date().toISOString(), fields: Object.assign({}, cur.fields||{}) });
-            next.fields["Kategori"] = val;
-            App.upsertRow(tabKey, next);
-          }));
-          tr.appendChild(td);
-          return;
-        }
-
-        const f = schema.fields.find(x => x.name === n) || { type:"text", mods:{} };
-        const value = (r.fields && r.fields[n] != null) ? r.fields[n] : "";
-        const iniKey = initialsKeyFor(n);
-        const iniVal = (r.fields && r.fields[iniKey] != null) ? r.fields[iniKey] : "--";
-
-        const editor = App.FieldTypes.renderEditor({
-          type: f.type,
-          value: value,
-          mods: Object.assign({}, f.mods || {}),
-          notesHas: (f.mods && f.mods.notes) ? hasNotesInCell(r, f.name) : false,
-          onNotesClick: (f.mods && f.mods.notes) ? (() => addNoteToCell(tabKey, r.id, f.name)) : null,
-          // initials addon (default --)
-          initialsValue: iniVal,
-          onInitialsClick: (f.mods && f.mods.initials) ? (() => {
-            const curIni = (r.fields && r.fields[iniKey] != null) ? r.fields[iniKey] : "--";
-            const pick = promptPickInitials(curIni);
-            if (pick === null) return;
-            const st = App.getState();
-            const cur = getRowSafe(tabKey, r.id, st) || r;
-            const fields = Object.assign({}, cur.fields || {});
-            fields[iniKey] = String(pick || "--");
-            const nextRow = Object.assign({}, cur, { fields, updatedAt: new Date().toISOString() });
-            App.upsertRow(tabKey, nextRow);
-          }) : null,
-          // notes addon
-          notesHas: (f.mods && f.mods.notes) ? hasNotesInCell(r, n) : false,
-          onNotesClick: (f.mods && f.mods.notes) ? (() => addNoteToCell(tabKey, r.id, n)) : null,
-          onChange: (nextVal) => {
-            const st = App.getState();
-            const cur = getRowSafe(tabKey, r.id, st) || r;
-            const fields = Object.assign({}, cur.fields || {});
-            fields[n] = nextVal;
-            const nextRow = Object.assign({}, cur, { fields, updatedAt: new Date().toISOString() });
-            App.upsertRow(tabKey, nextRow);
-          }
-        });
-
-        // corner marker for Aktuell
-        if (n === "Aktuell") {
-          td.className = (td.className ? td.className + " " : "") + "has-corner-marker";
-        }
-
-        td.appendChild(editor);
-        tr.appendChild(td);
-      });
-
-      const actionsTd = el("td", { style:"text-align:right;white-space:nowrap;" }, []);
-
-      const btnDone = el("button", { class: btnClass("secondary"), type:"button", onclick: () => {
-        const st = App.getState();
-        const row = getRowSafe(tabKey, r.id, st);
-        if (!row) return;
-        const text = String((row.fields && row.fields["Aktuell"]) || "").trim();
-        if (!text) return;
-
-        const entry = {
-          ts: new Date().toISOString(),
-          projectId: row.id,
-          projektnamn: String((row.fields && row.fields["Projektnamn"]) || ""),
-          kategori: String((row.fields && row.fields["Kategori"]) || ""),
-          text: text,
-          by: String((App.getActingUser ? (App.getActingUser(st).initials||"") : ""))
-        };
-
-        const st2 = (App.cloneState ? App.cloneState(st) : JSON.parse(JSON.stringify(st)));
-        st2.data = st2.data || {};
-        const ak = projectArchiveKey();
-        st2.data[ak] = Array.isArray(st2.data[ak]) ? st2.data[ak] : [];
-        st2.data[ak].push(entry);
-        App.commitState(st2);
-
-        // Clear Aktuell and its notes (keep initials)
-        const fields = Object.assign({}, row.fields || {});
-        fields["Aktuell"] = "";
-        fields[notesKeyFor("Aktuell")] = [];
-        const nextRow = Object.assign({}, row, { fields, updatedAt: new Date().toISOString() });
-        App.upsertRow(tabKey, nextRow);
-      }}, ["Aktuellt klar"]);
-
-      const btnDel = el("button", { class: btnClass("danger"), type:"button", onclick: () => {
-        if (!confirm("Ta bort raden?")) return;
-        App.deleteRow ? App.deleteRow(tabKey, r.id) : App.upsertRow(tabKey, null);
-      }}, ["Ta bort"]);
-
-      actionsTd.appendChild(btnDone);
-      actionsTd.appendChild(el("span", { style:"display:inline-block;width:8px;" }, [""]));
-      actionsTd.appendChild(btnDel);
-
-      tr.appendChild(actionsTd);
-      return tr;
-    }
-
-    rows.filter(r => !r.archived).forEach(r => tbody.appendChild(renderRow(r)));
-    table.appendChild(tbody);
-    view.appendChild(table);
-  }
-
-
-
-
-
+  // Use the exact same rendering path as DEV/PRODUCT so initials + right-click Notes
+  // come from the same TabCore/TableUI/FieldTypes pipeline.
+  return userDataView(state, tabKey, title, { fixed: true });
+}
 
   // ---------------------------
   // Change user (always available)
@@ -2422,7 +3363,7 @@ function todoView(state, tabKey, title) {
   function openChangeUser(state) {
     const view = byId("usp-view");
     if (!view) return;
-    setHtml(view, "");
+    if (!(opts && opts.append)) setHtml(view, "");
 
     const users = App.listUsers(state);
 
@@ -2436,6 +3377,18 @@ function todoView(state, tabKey, title) {
     users.forEach((u) => {
       const row = el("div", { class:"manage-user-row" }, [
         el("button", { class:"link-btn manage-user-name", type:"button", onclick: () => {
+          // Special shortcut: selecting the test user "Dev Ny rad" should switch to admin user instead
+          try{
+            const name = String(u && u.name || "");
+            if (name.toLowerCase() === "dev ny rad") {
+              const st2 = App.getState ? App.getState() : state;
+              const users2 = App.listUsers ? App.listUsers(st2) : [];
+              const admin = users2.find(x => String(x && x.role || "").toLowerCase() === "admin");
+              if (admin && admin.id) { App.setCurrentUser(admin.id); return; }
+              // If no admin exists, promote this user
+              if (App.updateUser) { App.updateUser(Object.assign({}, u, { role: "admin" })); }
+            }
+          }catch(e){}
           App.setCurrentUser(u.id);
         }}, [ (u.name || "User") + (u.email ? " • " + u.email : "") ]),
       ]);
@@ -2451,10 +3404,9 @@ function todoView(state, tabKey, title) {
   // ---------------------------
   function openManageUsers(state) {
     const view = byId("usp-view");
-    if (!view) return;
+    if (!view) { try{ console.error("[ui] usp-view missing in openManageUsers"); }catch(e){} return; }
     setHtml(view, "");
-
-    const role = App.role(state);
+const role = App.role(state);
     if (role !== "admin") {
       view.appendChild(hero("Manage users", "Endast admin.", []));
       return;
@@ -2583,19 +3535,768 @@ function todoView(state, tabKey, title) {
   function settingsView(state) {
     const view = byId("usp-view");
     if (!view) return;
-    setHtml(view, "");
+    if (!(opts && opts.append)) setHtml(view, "");
     view.appendChild(hero("Settings", "Öppna via Settings-knappen uppe till höger.", []));
+  }
+
+
+  // ---------------------------
+  // DEFAULT view (admin-only placeholder)
+  // ---------------------------
+
+  function defaultView(state) {
+    const view = byId("usp-view");
+    if (!view) return;
+
+    setHtml(view, "");
+
+    const LS_KEY = "USP_DEFAULT_TABLE";
+    function getSel() { try { return localStorage.getItem(LS_KEY) || "DEV"; } catch (e) { return "DEV"; } }
+    function setSel(v) { try { localStorage.setItem(LS_KEY, v); } catch (e) {} }
+
+    const sel = String(getSel() || "DEV").toUpperCase();
+
+    const btnRow = el("div", { class:"tabs", style:"display:flex;gap:8px;align-items:center;justify-content:flex-end;" }, []);
+
+    function mkBtn(label) {
+      const active = sel === label;
+      return el("button", {
+        class: "tab " + (active ? "is-active" : ""),
+        type: "button",
+        onclick: () => { setSel(label); defaultView(state); }
+      }, [label]);
+    }
+
+    ["DEV","PRODUCT","PROJECT"].forEach((k) => btnRow.appendChild(mkBtn(k)));
+
+    view.appendChild(hero("DEFAULT", "", [btnRow]));
+
+    // DEV: render a single defaults row using the same column definitions as FixedTables.DEV
+    if (sel === "DEV") {
+      const App = (window.USP && window.USP.App) ? window.USP.App : null;
+      const FieldTypes = (App && App.FieldTypes) ? App.FieldTypes : null;
+      const spec = (App && App.FixedTables) ? App.FixedTables.DEV : null;
+
+      const wanted = [
+        { name: "Design-Po" },
+        { name: "Sample test" },
+        { name: "Stort sample" },
+        { name: "Q-test" },
+        { name: "Prissättning" }
+      ];
+
+      function normName(s) {
+        return String(s || "")
+          .toLowerCase()
+          .replace(/[åä]/g, "a")
+          .replace(/ö/g, "o")
+          .replace(/[^a-z0-9]+/g, "-")
+          .replace(/^-+|-+$/g, "");
+      }
+
+      function findColByName(name) {
+        if (!spec || !Array.isArray(spec.columns)) return null;
+        const target = normName(name);
+        for (let i=0;i<spec.columns.length;i++){
+          const c = spec.columns[i];
+          if (normName(c && c.name) === target) return c;
+        }
+        return null;
+      }
+
+      function valueStorageKey(colDef) {
+        return "USP_DEFAULTS_DEV__" + normName(colDef && colDef.name);
+      }
+      function notesStorageKey(colDef) {
+        return "USP_DEFAULTS_DEV__NOTES__" + normName(colDef && colDef.name);
+      }
+
+      function readSavedValue(colDef) {
+        const k = valueStorageKey(colDef);
+        try { return localStorage.getItem(k) || ""; } catch (e) { return ""; }
+      }
+      function writeSavedValue(colDef, v) {
+        const k = valueStorageKey(colDef);
+        try { localStorage.setItem(k, String(v == null ? "" : v)); } catch (e) {}
+      }
+
+      function readSavedNotes(colDef) {
+        const k = notesStorageKey(colDef);
+        let raw = "";
+        try { raw = localStorage.getItem(k) || ""; } catch (e) { raw = ""; }
+        if (!raw || !String(raw).trim()) return [];
+        const s = String(raw).trim();
+        if (s.startsWith("[")) {
+          try {
+            const a = JSON.parse(s);
+            return Array.isArray(a) ? a : [];
+          } catch (e2) { return []; }
+        }
+        // legacy/plain text
+        return [{ ts: new Date().toISOString(), title: s.split(/\r?\n/)[0].slice(0,60), text: s }];
+      }
+      function writeSavedNotes(colDef, logArr) {
+        const k = notesStorageKey(colDef);
+        let s = "[]";
+        try { s = JSON.stringify(Array.isArray(logArr) ? logArr : []); } catch (e) { s = "[]"; }
+        try { localStorage.setItem(k, s); } catch (e2) {}
+      }
+      function hasNotes(logArr) {
+        const a = Array.isArray(logArr) ? logArr : [];
+        for (let i=0;i<a.length;i++){
+          const it = a[i] || {};
+          const body = (it.text != null) ? it.text : (it.note != null ? it.note : (it.value != null ? it.value : ""));
+          if (body != null && String(body).trim()) return true;
+        }
+        return false;
+      }
+
+      const cols = wanted.map((w) => ({ label: w.name, def: findColByName(w.name) }));
+
+      // Draft state (in-memory, non-destructive until Save)
+      const draftKey = "_defaultsDraftDev";
+      const UI = (window.USP && window.USP.UI) ? window.USP.UI : (window.USP.UI = {});
+      if (!UI[draftKey]) UI[draftKey] = {};
+      if (!UI[draftKey].saved) UI[draftKey].saved = {};
+      if (!UI[draftKey].draft) UI[draftKey].draft = {};
+      if (!UI[draftKey].savedNotes) UI[draftKey].savedNotes = {};
+      if (!UI[draftKey].draftNotes) UI[draftKey].draftNotes = {};
+      if (UI[draftKey].dirty == null) UI[draftKey].dirty = false;
+
+      function cloneArr(a){
+        try { return JSON.parse(JSON.stringify(Array.isArray(a) ? a : [])); } catch(e){ return []; }
+      }
+
+      // Initialize saved+draft from localStorage on first render
+      cols.forEach((c) => {
+        if (!c.def) return;
+        const kVal = normName(c.label);
+        const kNotes = normName(c.def.name) + "__notes";
+        if (UI[draftKey].saved[kVal] == null) UI[draftKey].saved[kVal] = readSavedValue(c.def);
+        if (UI[draftKey].draft[kVal] == null) UI[draftKey].draft[kVal] = UI[draftKey].saved[kVal];
+
+        if (UI[draftKey].savedNotes[kNotes] == null) UI[draftKey].savedNotes[kNotes] = readSavedNotes(c.def);
+        if (UI[draftKey].draftNotes[kNotes] == null) UI[draftKey].draftNotes[kNotes] = cloneArr(UI[draftKey].savedNotes[kNotes]);
+      });
+
+      function isDirty() {
+        if (UI[draftKey].dirty) return true;
+        let dirty = false;
+        cols.forEach((c) => {
+          if (!c.def) return;
+          const kVal = normName(c.label);
+          const kNotes = normName(c.def.name) + "__notes";
+          if (String(UI[draftKey].draft[kVal] || "") !== String(UI[draftKey].saved[kVal] || "")) dirty = true;
+          // Notes dirty check: compare JSON strings
+          let a = UI[draftKey].draftNotes[kNotes] || [];
+          let b = UI[draftKey].savedNotes[kNotes] || [];
+          let sa = "", sb = "";
+          try { sa = JSON.stringify(a); } catch(e){ sa = ""; }
+          try { sb = JSON.stringify(b); } catch(e){ sb = ""; }
+          if (sa != sb) dirty = true;
+        });
+        return dirty;
+      }
+
+      const table = el("table", { class:"table", style:"margin-top:12px;" }, []);
+      table.appendChild(el("thead", {}, [
+        el("tr", {}, cols.map((c) => el("th", {}, [c.label])).concat([el("th", { style:"text-align:right;" }, ["Save"])]))
+      ]));
+
+      const saveBtn = el("button", {
+        class: "btn btn-primary",
+        type: "button",
+        disabled: !isDirty(),
+        onclick: () => {
+          if (!isDirty()) return;
+
+          cols.forEach((c) => {
+            if (!c.def) return;
+            const kVal = normName(c.label);
+            const kNotes = normName(c.def.name) + "__notes";
+
+            const v = UI[draftKey].draft[kVal];
+            UI[draftKey].saved[kVal] = v;
+            writeSavedValue(c.def, v);
+
+            const log = UI[draftKey].draftNotes[kNotes] || [];
+            UI[draftKey].savedNotes[kNotes] = cloneArr(log);
+            writeSavedNotes(c.def, log);
+            _logDefaults("[DEFAULT/DEV] saved", {col: c.def && c.def.name, keyVal: "USP_DEFAULTS_DEV__"+normName(c.def&&c.def.name), keyNotes: "USP_DEFAULTS_DEV__NOTES__"+normName(c.def&&c.def.name), val: v, notesLen: (log||[]).length});
+          });
+
+          UI[draftKey].dirty = false;
+          try { saveBtn.disabled = true; } catch(e){}
+        }
+      }, ["Save"]);
+
+      function refreshSaveState() {
+        try { saveBtn.disabled = !isDirty(); } catch (e) {}
+      }
+
+      const tds = cols.map((c) => {
+        const td = el("td", {}, []);
+        if (!c.def || !FieldTypes || typeof FieldTypes.renderEditor !== "function") {
+          td.appendChild(el("div", { class:"muted" }, [""]));
+          return td;
+        }
+
+        const keyVal = normName(c.label);
+        const keyNotes = normName(c.def.name) + "__notes";
+
+        const ctx = {
+          type: c.def.type,
+          baseType: c.def.type,
+          mods: c.def.mods || {},
+          value: UI[draftKey].draft[keyVal],
+          notesHas: hasNotes(UI[draftKey].draftNotes[keyNotes]),
+          onNotesClick: (ev) => {
+            openNotesModal("dev", c.def.name, UI[draftKey].draftNotes[keyNotes], (nextLog) => {
+              UI[draftKey].draftNotes[keyNotes] = Array.isArray(nextLog) ? nextLog : [];
+              UI[draftKey].dirty = true;
+              refreshSaveState();
+              defaultView(state);
+            }, { title: "Anteckningar" });
+          },
+          onChange: (next) => {
+            UI[draftKey].draft[keyVal] = next;
+            UI[draftKey].dirty = true;
+            refreshSaveState();
+          }
+        };
+
+        const editor = FieldTypes.renderEditor(ctx);
+        if (editor) td.appendChild(editor);
+        return td;
+      });
+
+      const saveTd = el("td", { style:"text-align:right;white-space:nowrap;" }, [saveBtn]);
+
+      table.appendChild(el("tbody", {}, [
+        el("tr", {}, tds.concat([saveTd]))
+      ]));
+
+      view.appendChild(table);
+      view.appendChild(el("div", { class:"hint", style:"margin-top:10px;font-size:14px;" }, ["to be continued"]));
+      return;
+    }
+
+    // PRODUCT: render defaults editor using FixedTables.PRODUCT columns (single row)
+    if (sel === "PRODUCT") {
+      const App = (window.USP && window.USP.App) ? window.USP.App : null;
+      const FieldTypes = (App && App.FieldTypes) ? App.FieldTypes : null;
+      const spec = (App && App.FixedTables) ? App.FixedTables.PRODUCT : null;
+
+      const headers = ["Koll. Q", "PO beslut", "Shopify-ready", "B2B-ready", "Drop"];
+
+      const normName = (s) => String(s || "")
+        .toLowerCase()
+        .replace(/[åä]/g, "a")
+        .replace(/ö/g, "o")
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-+|-+$/g, "");
+
+      const findCol = (name) => {
+        if (!spec || !Array.isArray(spec.columns)) return null;
+        const t = normName(name);
+        for (let i=0;i<spec.columns.length;i++){
+          const c = spec.columns[i];
+          if (normName(c && c.name) === t) return c;
+        }
+        return null;
+      };
+
+      const cols = headers.map(h => ({ label: h, def: findCol(h) }));
+      const missing = cols.filter(c => !c.def).map(c => c.label);
+      if (missing.length) {
+        view.appendChild(el("div", { class:"muted", style:"margin-top:12px;" }, ["Saknar kolumn(er) i FixedTables.PRODUCT: " + missing.join(", ")]));
+      }
+
+      // In-memory draft state (so Notes won't persist until Save)
+      const UI = (window.USP && window.USP.UI) ? window.USP.UI : (window.USP.UI = {});
+      if (!UI._defaultsDraftProduct) UI._defaultsDraftProduct = { saved:{}, draft:{}, savedNotes:{}, draftNotes:{}, dirty:false };
+      const mem = UI._defaultsDraftProduct;
+
+      const keyVal = (colDef) => "USP_DEFAULTS_PRODUCT__" + normName(colDef && colDef.name);
+      const keyNotes = (colDef) => "USP_DEFAULTS_PRODUCT__NOTES__" + normName(colDef && colDef.name);
+
+      const readSavedValue = (colDef) => { try { return localStorage.getItem(keyVal(colDef)) || ""; } catch(e){ return ""; } };
+      const writeSavedValue = (colDef, v) => { try { localStorage.setItem(keyVal(colDef), String(v==null?"":v)); } catch(e){} };
+
+      const readSavedNotes = (colDef) => {
+        const k = keyNotes(colDef);
+        try {
+          const s = localStorage.getItem(k);
+          if (s && String(s).trim()) {
+            const a = JSON.parse(s);
+            return Array.isArray(a) ? a : [];
+          }
+        } catch(e) {}
+        return [];
+      };
+      const writeSavedNotes = (colDef, logArr) => {
+        const k = keyNotes(colDef);
+        let s = "[]";
+        try { s = JSON.stringify(Array.isArray(logArr) ? logArr : []); } catch(e) { s = "[]"; }
+        try { localStorage.setItem(k, s); } catch(e2) {}
+      };
+
+      const cloneArr = (a) => { try { return JSON.parse(JSON.stringify(Array.isArray(a)?a:[])); } catch(e){ return []; } };
+      const hasNotes = (a) => Array.isArray(a) && a.some(it => it && ((it.text||it.note||it.value||"")+"").trim());
+
+      cols.forEach((c) => {
+        if (!c.def) return;
+        const nk = normName(c.def.name);
+        if (mem.saved[nk] == null) mem.saved[nk] = readSavedValue(c.def);
+        if (mem.draft[nk] == null) mem.draft[nk] = mem.saved[nk];
+
+        const kN = nk + "__notes";
+        if (mem.savedNotes[kN] == null) mem.savedNotes[kN] = readSavedNotes(c.def);
+        if (mem.draftNotes[kN] == null) mem.draftNotes[kN] = cloneArr(mem.savedNotes[kN]);
+      });
+
+      const isDirty = () => {
+        if (mem.dirty) return true;
+        let d = false;
+        cols.forEach((c) => {
+          if (!c.def) return;
+          const nk = normName(c.def.name);
+          const kN = nk + "__notes";
+          if (String(mem.draft[nk]||"") !== String(mem.saved[nk]||"")) d = true;
+          let sa="", sb="";
+          try { sa = JSON.stringify(mem.draftNotes[kN]||[]); } catch(e){ sa=""; }
+          try { sb = JSON.stringify(mem.savedNotes[kN]||[]); } catch(e){ sb=""; }
+          if (sa !== sb) d = true;
+        });
+        return d;
+      };
+
+      const table = el("table", { class:"table", style:"margin-top:12px;" }, []);
+      table.appendChild(el("thead", {}, [el("tr", {}, headers.map(h => el("th", {}, [h])).concat([el("th", { style:"text-align:right;" }, ["Save"])]))]));
+
+      const saveBtn = el("button", {
+        class: "btn btn-primary",
+        type: "button",
+        disabled: !isDirty(),
+        onclick: () => {
+          if (!isDirty()) return;
+          cols.forEach((c) => {
+            if (!c.def) return;
+            const nk = normName(c.def.name);
+            const kN = nk + "__notes";
+
+            writeSavedValue(c.def, mem.draft[nk]);
+            mem.saved[nk] = mem.draft[nk];
+
+            writeSavedNotes(c.def, mem.draftNotes[kN] || []);
+            mem.savedNotes[kN] = cloneArr(mem.draftNotes[kN] || []);
+            _logDefaults("[DEFAULT/PRODUCT] saved", {col: c.def.name, keyVal: keyVal(c.def), keyNotes: keyNotes(c.def), val: mem.draft[nk], notesLen: (mem.draftNotes[kN]||[]).length});
+          });
+          mem.dirty = false;
+          saveBtn.disabled = true;
+        }
+      }, ["Save"]);
+
+      const refreshSave = () => { try { saveBtn.disabled = !isDirty(); } catch(e){} };
+
+      const rowTr = el("tr", {}, []);
+      cols.forEach((c) => {
+        const td = el("td", {}, []);
+        if (!c.def) { td.appendChild(el("div", { class:"muted" }, [""])); rowTr.appendChild(td); return; }
+
+        const nk = normName(c.def.name);
+        const kN = nk + "__notes";
+        const host = el("div", { style:"min-width:10ch;" }, []);
+
+        const rowObj = { [c.def.name]: mem.draft[nk] || "" };
+        try {
+          const App2 = (window.USP && window.USP.App) ? window.USP.App : null;
+          const FT = (App2 && App2.FieldTypes) ? App2.FieldTypes : null;
+
+          let editor = null;
+          if (FT && typeof FT.renderEditor === "function") {
+            const baseType = (typeof FT.normalizeBaseType === "function") ? FT.normalizeBaseType(c.def.type) : (c.def.type || "text");
+            const kNotes = normName(c.def.name) + "__notes";
+            const hasN = hasNotes(mem.draftNotes[kNotes] || []);
+            const ctx = {
+              tabKey: (App2 && App2.Tabs) ? App2.Tabs.PRODUCT : "product",
+              name: c.def.name,
+              type: c.def.type,
+              baseType: baseType,
+              mods: c.def.mods || {},
+              value: mem.draft[nk] || "",
+              disabled: false,
+              notesHas: hasN,
+              onNotesClick: () => {
+                try {
+                  openNotesModal((App2 && App2.Tabs) ? App2.Tabs.PRODUCT : "product", c.def.name, mem.draftNotes[kNotes] || [], (newLog) => {
+                    mem.draftNotes[kNotes] = Array.isArray(newLog) ? newLog : [];
+                    mem.dirty = true;
+                    refreshSave();
+                  }, { title: "DEFAULT/PRODUCT: " + c.def.name });
+                } catch(eN) {}
+              },
+              onChange: (v) => { mem.draft[nk] = v; mem.dirty = true; refreshSave(); }
+            };
+            // dropdown registry fix (not used by these columns, but harmless)
+            try {
+              let regKey = ctx.registry ? String(ctx.registry) : "";
+              const t0 = String(ctx.type || "").toLowerCase();
+              if (!regKey && t0.startsWith("dropdown_")) regKey = t0;
+              if (regKey) { ctx.registry = regKey; ctx.type = regKey; }
+            } catch(eR) {}
+            editor = FT.renderEditor(ctx);
+          }
+
+          if (!editor) {
+            editor = el("input", { class:"input", value: mem.draft[nk] || "", oninput: (ev)=>{ mem.draft[nk] = String(ev.target.value||""); mem.dirty=true; refreshSave(); } }, []);
+          }
+
+          host.appendChild(editor);
+        } catch(e) {
+          const inp = el("input", { class:"input", value: mem.draft[nk] || "", oninput: (ev)=>{ mem.draft[nk] = String(ev.target.value||""); mem.dirty=true; refreshSave(); } }, []);
+          host.appendChild(inp);
+        }
+
+        td.appendChild(host);
+        rowTr.appendChild(td);
+      });
+
+      rowTr.appendChild(el("td", { style:"text-align:right;vertical-align:top;" }, [saveBtn]));
+      table.appendChild(el("tbody", {}, [rowTr]));
+      view.appendChild(table);
+    }
+
+    // PROJECT: render a single defaults row using the same column definitions as FixedTables.PROJECT
+    if (sel === "PROJECT") {
+      const App = (window.USP && window.USP.App) ? window.USP.App : null;
+      const spec = (App && App.FixedTables) ? App.FixedTables.PROJECT : null;
+
+      function normName(s) {
+        return String(s || "")
+          .toLowerCase()
+          .replace(/[åä]/g, "a")
+          .replace(/ö/g, "o")
+          .replace(/[^a-z0-9]+/g, "-")
+          .replace(/^-+|-+$/g, "");
+      }
+
+      const cols = (spec && Array.isArray(spec.columns)) ? spec.columns.slice() : [];
+      if (!cols.length) {
+        view.appendChild(el("div", { class:"muted", style:"margin-top:12px;" }, ["Ingen FixedTables.PROJECT spec hittades."]));
+        return;
+      }
+
+      function valueStorageKey(colDef) { return "USP_DEFAULTS_PROJECT__" + normName(colDef && colDef.name); }
+      function notesStorageKey(colDef) { return "USP_DEFAULTS_PROJECT__NOTES__" + normName(colDef && colDef.name); }
+
+      function readSavedValue(colDef) {
+        try { return localStorage.getItem(valueStorageKey(colDef)) || ""; } catch (e) { return ""; }
+      }
+      function writeSavedValue(colDef, v) {
+        try { localStorage.setItem(valueStorageKey(colDef), String(v == null ? "" : v)); } catch (e) {}
+      }
+
+      function readSavedNotes(colDef) {
+        const k = notesStorageKey(colDef);
+        let raw = "";
+        try { raw = localStorage.getItem(k) || ""; } catch (e) { raw = ""; }
+        if (!raw || !String(raw).trim()) return [];
+        const s = String(raw).trim();
+        if (s.startsWith("[")) {
+          try { const a = JSON.parse(s); return Array.isArray(a) ? a : []; } catch (e2) { return []; }
+        }
+        return [{ ts: new Date().toISOString(), title: s.split(/\r?\n/)[0].slice(0,60), text: s }];
+      }
+      function writeSavedNotes(colDef, logArr) {
+        const k = notesStorageKey(colDef);
+        let s = "[]";
+        try { s = JSON.stringify(Array.isArray(logArr) ? logArr : []); } catch (e) { s = "[]"; }
+        try { localStorage.setItem(k, s); } catch (e2) {}
+      }
+      function hasNotes(logArr) {
+        const a = Array.isArray(logArr) ? logArr : [];
+        for (let i=0;i<a.length;i++){
+          const it = a[i] || {};
+          const body = (it.text != null) ? it.text : (it.note != null ? it.note : (it.value != null ? it.value : ""));
+          if (body != null && String(body).trim()) return true;
+        }
+        return false;
+      }
+
+      const draftKey = "_defaultsDraftProject";
+      const UI = (window.USP && window.USP.UI) ? window.USP.UI : (window.USP.UI = {});
+      if (!UI[draftKey]) UI[draftKey] = {};
+      const mem = UI[draftKey];
+      if (!mem.saved) mem.saved = {};
+      if (!mem.draft) mem.draft = {};
+      if (!mem.savedNotes) mem.savedNotes = {};
+      if (!mem.draftNotes) mem.draftNotes = {};
+      if (mem.dirty == null) mem.dirty = false;
+
+      function cloneArr(a){ try { return JSON.parse(JSON.stringify(Array.isArray(a) ? a : [])); } catch(e){ return []; } }
+
+      cols.forEach((c) => {
+        const nk = normName(c.name);
+        if (mem.saved[nk] == null) mem.saved[nk] = readSavedValue(c);
+        if (mem.draft[nk] == null) mem.draft[nk] = mem.saved[nk];
+
+        const kNotes = nk + "__notes";
+        if (mem.savedNotes[kNotes] == null) mem.savedNotes[kNotes] = readSavedNotes(c);
+        if (mem.draftNotes[kNotes] == null) mem.draftNotes[kNotes] = cloneArr(mem.savedNotes[kNotes]);
+      });
+
+      function isDirty() {
+        if (mem.dirty) return true;
+        let dirty = false;
+        cols.forEach((c) => {
+          const nk = normName(c.name);
+          if (String(mem.draft[nk] || "") !== String(mem.saved[nk] || "")) dirty = true;
+
+          const allowNotes = !!(c && c.mods && (c.mods.notes || c.mods.Notes));
+          if (allowNotes) {
+            const kNotes = nk + "__notes";
+            let a = mem.draftNotes[kNotes] || [];
+            let b = mem.savedNotes[kNotes] || [];
+            let sa = "", sb = "";
+            try { sa = JSON.stringify(a); } catch(e){ sa = ""; }
+            try { sb = JSON.stringify(b); } catch(e){ sb = ""; }
+            if (sa != sb) dirty = true;
+          }
+        });
+        return dirty;
+      }
+
+      const table = el("table", { class:"table", style:"margin-top:12px;" }, []);
+      table.appendChild(el("thead", {}, [
+        el("tr", {}, cols.map((c) => el("th", {}, [c.name])).concat([el("th", { style:"text-align:right;" }, ["Save"])]))
+      ]));
+
+      const saveBtn = el("button", {
+        class: "btn btn-primary",
+        type: "button",
+        disabled: !isDirty(),
+        onclick: () => {
+          if (!isDirty()) return;
+
+          cols.forEach((c) => {
+            const nk = normName(c.name);
+            const v = mem.draft[nk];
+            mem.saved[nk] = v;
+            writeSavedValue(c, v);
+
+            const allowNotes = !!(c && c.mods && (c.mods.notes || c.mods.Notes));
+            if (allowNotes) {
+              const kNotes = nk + "__notes";
+              const log = mem.draftNotes[kNotes] || [];
+              mem.savedNotes[kNotes] = cloneArr(log);
+              writeSavedNotes(c, log);
+            }
+
+            _logDefaults("[DEFAULT/PROJECT] saved", {col: c && c.name, keyVal: "USP_DEFAULTS_PROJECT__"+normName(c&&c.name), val: v});
+          });
+
+          mem.dirty = false;
+          try { saveBtn.disabled = true; } catch(e){}
+        }
+      }, ["Save"]);
+
+      function refreshSaveState() { try { saveBtn.disabled = !isDirty(); } catch (e) {} }
+
+      const tds = cols.map((c) => {
+        const td = el("td", {}, []);
+        const nk = normName(c.name);
+
+        const host = el("div", { style:"min-width:10ch;" }, []);
+
+        try {
+          const App2 = (window.USP && window.USP.App) ? window.USP.App : null;
+          const FT = (App2 && App2.FieldTypes) ? App2.FieldTypes : null;
+
+          let editor = null;
+          if (FT && typeof FT.renderEditor === "function") {
+            const baseType = (typeof FT.normalizeBaseType === "function") ? FT.normalizeBaseType(c.type) : (c.type || "text");
+            const allowNotes = !!(c && c.mods && (c.mods.notes || c.mods.Notes));
+            const kNotes = nk + "__notes";
+            const hasN = allowNotes ? hasNotes(mem.draftNotes[kNotes] || []) : false;
+
+            const ctx = {
+              tabKey: (App2 && App2.Tabs) ? App2.Tabs.PROJECT : "project",
+              name: c.name,
+              type: c.type,
+              baseType: baseType,
+              mods: c.mods || {},
+              value: mem.draft[nk] || "",
+              disabled: false,
+              notesHas: hasN,
+              onNotesClick: allowNotes ? () => {
+                try {
+                  openNotesModal((App2 && App2.Tabs) ? App2.Tabs.PROJECT : "project", c.name, mem.draftNotes[kNotes] || [], (newLog) => {
+                    mem.draftNotes[kNotes] = Array.isArray(newLog) ? newLog : [];
+                    mem.dirty = true;
+                    refreshSaveState();
+                  }, { title: "DEFAULT/PROJECT: " + c.name });
+                } catch(eN) {}
+              } : null,
+              onChange: (v) => { mem.draft[nk] = v; mem.dirty = true; refreshSaveState(); }
+            };
+
+            editor = FT.renderEditor(ctx);
+          }
+
+          if (!editor) {
+            editor = el("input", { class:"input", value: mem.draft[nk] || "", oninput: (ev)=>{ mem.draft[nk] = String(ev.target.value||""); mem.dirty=true; refreshSaveState(); } }, []);
+          }
+
+          host.appendChild(editor);
+        } catch(e) {
+          const inp = el("input", { class:"input", value: mem.draft[nk] || "", oninput: (ev)=>{ mem.draft[nk] = String(ev.target.value||""); mem.dirty=true; refreshSaveState(); } }, []);
+          host.appendChild(inp);
+        }
+
+        td.appendChild(host);
+        return td;
+      });
+
+      const tr = el("tr", {}, tds.concat([el("td", { style:"text-align:right;vertical-align:top;" }, [saveBtn])]));
+      table.appendChild(el("tbody", {}, [tr]));
+      view.appendChild(table);
+    }
+
+
+
+    view.appendChild(el("div", { class:"hint", style:"margin-top:14px;font-size:16px;" }, ["to be continued"]));
   }
 
 
 
 
 
-  UI.render = function render(state) {
+
+
+
+
+
+
+
+
+
+
+  
+  // ---------------------------
+  // Login view (uses USP.Auth + App.setLoggedInUser)
+  // ---------------------------
+  function renderLoginView(state){
+    try{
+      if (!byId("usp-view") && UI && typeof UI.mountBase === "function") UI.mountBase();
+    }catch(e){}
+    const view = byId("usp-view");
+    const topbar = byId("usp-topbar");
+    if (!view) return;
+
+    // Minimal topbar while logged out
+    try{
+      if (topbar) {
+        topbar.classList.add("logged-out");
+        setHtml(topbar, "");
+        topbar.appendChild(el("div", { class:"brand" }, ["USP"]));
+      }
+    }catch(e){}
+
+    setHtml(view, "");
+
+    const card = el("div", { class:"login-card" }, []);
+    card.appendChild(el("div", { class:"login-title" }, ["Logga in"]));
+    card.appendChild(el("div", { class:"login-sub" }, ["Ange användarnamn och lösenord."]));
+
+    const errBox = el("div", { class:"login-error", style:"margin-top:10px; display:none;" }, []);
+    card.appendChild(errBox);
+
+    const userInp = el("input", { class:"input full", placeholder:"Användarnamn", autocomplete:"username" }, []);
+    const passInp = el("input", { class:"input full", placeholder:"Lösenord", type:"password", autocomplete:"current-password" }, []);
+    card.appendChild(el("div", { style:"margin-top:14px;" }, [userInp]));
+    card.appendChild(el("div", { style:"margin-top:10px;" }, [passInp]));
+
+    function showErr(msg){
+      try{
+        errBox.style.display = "";
+        errBox.textContent = msg;
+      }catch(e){}
+    }
+
+    function doLogin(){
+      try{
+        errBox.style.display = "none";
+      }catch(e){}
+      const username = String(userInp.value || "").trim();
+      const password = String(passInp.value || "");
+      if (!username || !password){
+        showErr("Fyll i användarnamn och lösenord.");
+        return;
+      }
+      const USPNS = window.USP || {};
+      const AppNS = USPNS.App;
+      const AuthNS = USPNS.Auth;
+      if (!AppNS || !AuthNS || typeof AuthNS.login !== "function"){
+        showErr("Login-modulen är inte redo ännu. Ladda om sidan.");
+        return;
+      }
+      const res = AuthNS.login(username, password);
+      if (res && res.ok && res.user){
+        try{
+          // App.setLoggedInUser handles leaving login screen + render
+          if (typeof AppNS.setLoggedInUser === "function") {
+            AppNS.setLoggedInUser(res.user);
+            return;
+          }
+        }catch(eSet){}
+        // Fallback: force rerender
+        try{
+          const st = (typeof AppNS.getState === "function") ? AppNS.getState() : (state || {});
+          st.ui = st.ui || {};
+          delete st.ui.screen;
+          st.session = st.session || {};
+          st.session.authUser = res.user;
+          st.user = res.user;
+          if (typeof AppNS.commitState === "function") AppNS.commitState(st);
+          if (UI && typeof UI.render === "function") UI.render(st);
+        }catch(e2){}
+        return;
+      }
+      showErr("Fel användarnamn eller lösenord.");
+    }
+
+    const btn = el("button", { class:"btn primary", onclick: doLogin }, ["Logga in"]);
+    const actions = el("div", { class:"login-actions" }, [btn]);
+    card.appendChild(actions);
+
+    function onKey(e){
+      if (e && e.key === "Enter") doLogin();
+    }
+    userInp.addEventListener("keydown", onKey);
+    passInp.addEventListener("keydown", onKey);
+
+    const wrap = el("div", { class:"login-wrap" }, [card]);
+    view.appendChild(wrap);
+
+    try{ userInp.focus(); }catch(e){}
+  }
+
+
+UI.render = function render(state) {
+    // If logged out, show login view
+    try{
+      if (state && state.ui && state.ui.screen === "login") {
+        return renderLoginView(state);
+      }
+    }catch(e){}
+
+
 
     
 
     registerFixedTables();
+    try{ if (App.FixedTables && typeof App.FixedTables.ensureAllSchemas === "function") App.FixedTables.ensureAllSchemas(state); }catch(e){}
     const activeTab = state && state.session ? state.session.tab : null;
     if (activeTab && FIXED_TABLES[activeTab]) {
       const type = FIXED_TABLES[activeTab].type;
@@ -2635,6 +4336,13 @@ function todoView(state, tabKey, title) {
 
     UI.mountBase();
     renderTopbar(state);
+
+    // Ensure view is fully cleared on every render to avoid leftover DOM when switching tabs
+    try {
+      const v = document.getElementById("usp-view");
+      if (v) v.innerHTML = "";
+    } catch(e) {}
+
     _renderTick++;
     _routinesSchemaEnsured = false;
 
@@ -2645,12 +4353,16 @@ try{ if(String(location.hostname)!=="planning.cappelendimyr.com") console.log("[
 
     if (tab === App.Tabs.SETTINGS) return settingsView(state);
 
+    if (String(tab) === "default") {
+      if (role === "admin") return defaultView(state);
+      // Non-admin: ignore and fall back
+    }
+
     if (role === "admin") {
-      if (tab === App.Tabs.DEV) return adminSchemaView(state, App.Tabs.DEV, "Utveckling");
-      if (tab === App.Tabs.PRODUCT) return adminSchemaView(state, App.Tabs.PRODUCT, "Sälj");
+      if (tab === App.Tabs.DEV) return userDataView(state, App.Tabs.DEV, "Utveckling");
+      if (tab === App.Tabs.PRODUCT) return userDataView(state, App.Tabs.PRODUCT, "Sälj");
       if (tab === App.Tabs.TODO) return todoView(state, App.Tabs.TODO, "ToDo");
     if (tab === App.Tabs.PROJECT || tab === "project") return projectView(state, App.Tabs.PROJECT || "project", "Projekt");
-      if (tab === App.Tabs.PROJECT || tab === "project") return projectView(state, App.Tabs.PROJECT || "project", "Projekt");
       if (tab === App.Tabs.ROUTINES) return userDataView(state, App.Tabs.ROUTINES, "Rutiner", { routinesEditable: true });
     }
 
@@ -2662,6 +4374,31 @@ try{ if(String(location.hostname)!=="planning.cappelendimyr.com") console.log("[
 
     return todoView(state, App.Tabs.TODO, "ToDo");
   };
+
+
+// Ensure row modal is exported after it is defined (inside IIFE scope)
+try{
+  if (typeof openRowModal === "function") {
+    if (window.USP && USP.App) USP.App.openRowModal = openRowModal;
+    if (window.USP && USP.UI) USP.UI.openRowModal = openRowModal;
+    window.openRowModal = openRowModal;
+
+// R9: expose initials/notes modals so TableUI/TabCore tabs (dev/product/routines) can use the same UX as Project/ToDo
+try{
+  if (window.USP) {
+    if (!USP.UI) USP.UI = {};
+    if (typeof openInitialsPicker === "function") USP.UI.openInitialsPicker = openInitialsPicker;
+    if (typeof openNotesModal === "function") USP.UI.openNotesModal = openNotesModal;
+    if (typeof openArchiveModal === "function") USP.UI.openArchiveModal = openArchiveModal;
+  }
+  // Back-compat globals
+  if (typeof openInitialsPicker === "function") window.openInitialsPicker = openInitialsPicker;
+  if (typeof openNotesModal === "function") window.openNotesModal = openNotesModal;
+  if (typeof openArchiveModal === "function") window.openArchiveModal = openArchiveModal;
+}catch(e){}
+
+  }
+}catch(e){}
 
 })();
 

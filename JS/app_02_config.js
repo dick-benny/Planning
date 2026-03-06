@@ -1,4 +1,4 @@
-/* app_02_config.js
+/* app_02_config_67.js
    Safe config extender (does NOT overwrite USP.App).
    Keep this file even if mostly empty; it can hold env/config later.
 */
@@ -20,9 +20,111 @@
     return fallback;
   };
 
-  // Always use Express server + SQLite (no localStorage)
+  
+  // -----------------------------
+  // Single source of truth: DataMode
+  // - "local"  : localhost / file builds / offline work (localStorage only)
+  // - "server" : planning.cappelendimyr.com (remote DB via /api/state)
+  // Keep naming stable ("server") because App.DB adapter expects it.
+  // -----------------------------
   App.Config.getDataMode = function getDataMode() {
-    return "server";
+    try {
+      const host = String((location && location.hostname) || "").toLowerCase();
+      // Local dev / file builds typically have empty hostname
+      const isLocal =
+        !host ||
+        host === "localhost" ||
+        host === "127.0.0.1" ||
+        host === "::1" ||
+        host.endsWith(".local");
+
+      const isPlanningHost = host === "planning.cappelendimyr.com";
+
+      if (isPlanningHost) return "server";
+      return isLocal ? "local" : "local";
+    } catch (e) {
+      return "local";
+    }
   };
 
+  // Optional alias namespace for clarity (does not change behavior)
+  App.Env = App.Env || {};
+  App.Env.getDataMode = App.Config.getDataMode;
+
+
+  // Convenience accessors used by bootstrap/db modules (if any)
+  App.Config.getSupabaseUrl = function () {
+    return App.Config.get("NEXT_PUBLIC_SUPABASE_URL", "");
+  };
+  App.Config.getSupabaseKey = function () {
+    return App.Config.get("NEXT_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY", "");
+  };
+  // VERSION 70 (refactor): Host-based DataMode/DB_MODE
+  (function(){
+    const host = String((location && location.hostname) || "").toLowerCase();
+    const dm = App.Config.getDataMode();
+    // Keep existing flag for compatibility; "server" means remote DB.
+    App.Config.DB_MODE = (dm === "server") ? "server" : "local";
+
+    // Legacy placeholders (kept to avoid breaking any future code that expects them)
+    App.Config.SUPABASE_URL = App.Config.SUPABASE_URL || "https://nchgudsqleylfdysgabi.supabase.co";
+    App.Config.SUPABASE_PUBLISHABLE_KEY = App.Config.SUPABASE_PUBLISHABLE_KEY || "sb_publishable_TBIHlzs-Cw-fJfjUvkzzfw_mhrTLuLw";
+
+    try { console.log("[config] host=", host, "dataMode=", dm, "DB_MODE=", App.Config.DB_MODE); } catch(e) {}
+  })();
+
+
+  // VERSION 72: Registries (hardcoded lists)
+  App.Config.registers = App.Config.registers || {
+    // legacy keys (kept for backward compat)
+    produktkategori: ["matta","tapestry","colonnade","softass","paketering"],
+    projektkategori: ["kundprojekt","volymprojekt","samarbetsprojekt"],
+    todokategori: ["Allmänt","Info","Kontor","Sälj/Marknad","Shopify-B2C","Shopify-B2B","Logistik","Privat"],
+
+    // canonical dropdown registries (used by schema / dropdown_*_kategori)
+    dropdown_dev_kategori: ["matta","colonnade","tapestry","Softass"],
+    dropdown_product_kategori: ["matta","tapestry","colonnade","softass","paketering"],
+    dropdown_project_kategori: ["kundprojekt","volymprojekt","samarbetsprojekt"],
+    dropdown_todo_kategori: ["Allmänt","Info","Kontor","Sälj/Marknad","Shopify-B2C","Shopify-B2B","Logistik","Privat"]
+  };
+
+  // Backward compat alias
+  App.Config.DEFAULT_REGISTRIES = App.Config.DEFAULT_REGISTRIES || App.Config.registers;
+
+
+
+})();
+
+
+// --- Registry helpers (v01) ---
+(function(){
+  var USP = (window.USP = window.USP || {});
+  var App = (USP.App = USP.App || {});
+  App.Config = App.Config || {};
+
+  function sanitize(list){
+    var arr = Array.isArray(list) ? list.slice() : [];
+    arr = arr.map(function(v){ return (v==null ? "" : String(v)).trim(); }).filter(function(v){ return !!v; });
+    var seen = {};
+    var out = [];
+    for (var i=0;i<arr.length;i++){
+      var s = arr[i];
+      if (!seen[s]) { seen[s]=true; out.push(s); }
+    }
+    return out;
+  }
+
+  App.Config.getRegistry = function(name){
+    try {
+      if (App.Config.registers && Array.isArray(App.Config.registers[name])) return sanitize(App.Config.registers[name]);
+      if (App.Config.DEFAULT_REGISTRIES && Array.isArray(App.Config.DEFAULT_REGISTRIES[name])) return sanitize(App.Config.DEFAULT_REGISTRIES[name]);
+      if (Array.isArray(App.Config[name])) return sanitize(App.Config[name]);
+    } catch(e){}
+    return [];
+  };
+
+  App.Config.getRegistryWithAll = function(name){
+    var r = App.Config.getRegistry(name).filter(function(v){ return v !== "Alla"; });
+    return ["Alla"].concat(r);
+  };
 })();

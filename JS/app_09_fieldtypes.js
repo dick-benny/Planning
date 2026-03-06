@@ -1,5 +1,5 @@
-// [fieldtypes v116]
-/* app_09_fieldtypes_07.js
+// [fieldtypes v120]
+/* app_09_fieldtypes_10.js
    Dynamic FieldTypes: base + addons (mods)
 
    Base types:
@@ -109,7 +109,14 @@
     if (!x0) return "text";
     if (x0 === "datum" || x0 === "calendar" || x0 === "kalender") return "date";
     if (x0 === "veckonummer" || x0 === "veckokalender" || x0 === "weeknumber" || x0 === "weekcalendar") return "week";
-    if (["text","status","date","week","produktkategori","dropdown_produktkategori","todokategori"].includes(x0)) return x0;
+    if (x0 === "kvartal" || x0 === "quarter" || x0 === "quarters") return "quarter";
+    if (x0 === "dropdown_todo_kategori") return "dropdown_registry";
+    if (x0 === "dropdown_dev_kategori") return "dropdown_registry";
+    if (x0 === "dropdown_dev_syfte") return "dropdown_registry";
+    if (x0 === "dropdown_product_kategori") return "dropdown_registry";
+    if (x0 === "dropdown_project_kategori") return "dropdown_registry";
+    if (x0 === "dropdown_registry") return "dropdown_registry";
+    if (["text","status","date","week","quarter","produktkategori","dropdown_produktkategori","projektkategori","todokategori","dropdown_registry"].includes(x0)) return x0;
     return "text";
   }
 
@@ -127,6 +134,10 @@
     if (t === "week") {
       const v = normStr(value);
       return /^\d{4}-W\d{2}$/.test(v) ? v : "";
+    }
+    if (t === "quarter") {
+      const v = normStr(value).toUpperCase().replace(/\s+/g, "");
+      return /^(Q[1-4]|[1-4])$/.test(v) ? (v.length === 1 ? ("Q" + v) : v) : "";
     }
     if (t === "produktkategori") {
       const v = normStr(value).toLowerCase();
@@ -146,30 +157,83 @@
 
   function renderNotesIcon(ctx) {
     if (!ctx || typeof ctx.onNotesClick !== "function") return null;
-    const cls = "note-icon" + (ctx.notesHas ? " is-notes" : "");
-    const btn = el("button", { class: cls, type:"button" }, ["📝"]);
+
+    // Only render when the field declares notes support
+    const mods = ctx && ctx.mods ? ctx.mods : {};
+    if (!mods || !mods.notes) return null;
+
+    const has = !!ctx.notesHas;
+
+    const btn = el("button", {
+      class: "note-icon" + (has ? " is-notes" : ""),
+      type:"button",
+      style: has
+        ? "width:20px;height:20px;border-radius:50%;background:transparent;border:2px solid #60a5fa;color:#0f172a;padding:0;font-size:12px;line-height:16px;display:inline-flex;align-items:center;justify-content:center;"
+        : "width:20px;height:20px;border-radius:50%;background:transparent;border:1px solid rgba(15,23,42,.35);color:rgba(15,23,42,.55);padding:0;font-size:12px;line-height:18px;display:inline-flex;align-items:center;justify-content:center;"
+    }, ["📝"]);
+
     btn.addEventListener("click", function (e) {
-      e.preventDefault(); e.stopPropagation();
-      ctx.onNotesClick();
+      try { e.preventDefault(); e.stopPropagation(); } catch (e2) {}
+      ctx.onNotesClick(e);
     });
+
     return btn;
   }
 
   function renderInitialsRing(ctx) {
     if (!ctx || typeof ctx.onInitialsClick !== "function") return null;
     const v = normStr(ctx.initialsValue) || "--";
-    const cls = "act-initials" + (ctx.notesHas ? " is-notes" : "");
+    const cls = "act-initials" + ((ctx.initialsNotesHas || ctx.notesHas) ? " is-notes" : "");
     const btn = el("button", { class: cls, type:"button" }, [v]);
+
+    // Prefer shared helper to get consistent behavior:
+    // - left click -> initials picker
+    // - right click -> notes (context menu suppressed)
+    try {
+      const Helpers = (window.USP && window.USP.UI && window.USP.UI.Helpers) ? window.USP.UI.Helpers : null;
+      if (Helpers && typeof Helpers.bindInitials === "function") {
+        Helpers.bindInitials(btn, {
+          mods: (ctx && ctx.mods) ? ctx.mods : { initials:true },
+          onInitialsClick: function(){ try { ctx.onInitialsClick(); } catch (e) {} },
+          onNotesClick: (typeof ctx.onNotesClick === "function") ? function(ev){ try { ctx.onNotesClick(ev); } catch (e) {} } : null
+        });
+
+        // Extra guards: some browsers/environments may not fire contextmenu reliably on buttons inside tables.
+        // Support right-button down as well.
+        function rc(ev){
+          try {
+            if (!ev) return;
+            const b = (ev.button != null) ? ev.button : ev.which;
+            if (b !== 2) return;
+            if (typeof ctx.onNotesClick !== "function") return;
+            ev.preventDefault(); ev.stopPropagation();
+            ctx.onNotesClick(ev);
+          } catch (_) {}
+        }
+        btn.addEventListener("pointerdown", rc);
+        btn.addEventListener("mousedown", rc);
+        return btn;
+      }
+    } catch (e) {}
+
+    // Fallback (if helper missing): left click opens initials picker, right click opens notes (if available)
     btn.addEventListener("click", function (e) {
       e.preventDefault(); e.stopPropagation();
       ctx.onInitialsClick();
     });
-    // Right click opens notes if available
     btn.addEventListener("contextmenu", function (e) {
       if (!ctx.onNotesClick) return;
       e.preventDefault(); e.stopPropagation();
-      ctx.onNotesClick();
+      ctx.onNotesClick(e);
+      return false;
     });
+    btn.addEventListener("pointerdown", function(e){
+      try { if (!e || e.button !== 2 || !ctx.onNotesClick) return; e.preventDefault(); e.stopPropagation(); ctx.onNotesClick(e); } catch (_) {}
+    });
+    btn.addEventListener("mousedown", function(e){
+      try { if (!e || e.button !== 2 || !ctx.onNotesClick) return; e.preventDefault(); e.stopPropagation(); ctx.onNotesClick(e); } catch (_) {}
+    });
+
     return btn;
   }
 
@@ -180,6 +244,7 @@
     // Corner applies if base=status OR ctx.onCornerChange exists
     const cornerEnabled = (base === "status") || (typeof (ctx && ctx.onCornerChange) === "function");
     const cornerVal = normalizeValue("status", ctx && ctx.cornerValue);
+    let cornerState = cornerVal;
 
     const cls = ["act-field"];
     if (cornerVal) cls.push("status-" + cornerVal);
@@ -187,13 +252,14 @@
     const wrap = el("div", { class: cls.join(" ") }, []);
 
     if (cornerEnabled) {
-      const cornerBtn = el("button", { class:"act-status-corner", type:"button", disabled }, []);
+      const cornerCls = "act-status-corner"; // use same round corner everywhere (Project-style)
+      const cornerBtn = el("button", { class: cornerCls, type:"button", disabled }, []);
       cornerBtn.addEventListener("click", function (e) {
         e.preventDefault(); e.stopPropagation();
         if (disabled) return;
 
-        const cur = normalizeValue("status", ctx && ctx.cornerValue);
-        const nx = nextCorner(cur);
+        const nx = nextCorner(cornerState);
+        cornerState = nx;
 
         // Immediate UI
         wrap.classList.remove("status-green","status-yellow","status-red");
@@ -210,11 +276,9 @@
     const ring = renderInitialsRing(ctx);
     if (ring) wrap.appendChild(ring);
 
-    // Notes icon only when there is no initials addon (notes via right-click on initials)
-    if (!ring) {
-      const notesBtn = renderNotesIcon(ctx);
-      if (notesBtn) wrap.appendChild(notesBtn);
-    }
+    // Notes icon whenever notes support exists for the field
+    const notesBtn = renderNotesIcon(ctx);
+    if (notesBtn) wrap.appendChild(notesBtn);
 
     return wrap;
   }
@@ -253,14 +317,25 @@
     const disabled = !!(ctx && ctx.disabled);
     const value = normalizeValue("date", ctx && ctx.value);
 
-    const display = el("div", { class:"act-date-display", text: value || "-- -- --", style:"width:15ch;min-width:15ch;max-width:15ch;font-size:0.85em;text-align:center;" }, []);
-    const picker = el("input", { class:"act-date-picker", type:"date", value, disabled, style:"width:15ch;min-width:15ch;max-width:15ch;font-size:0.85em;text-align:center;" }, []);
+    const display = el("div", { class:"act-date-display", text: value || "-- -- --", style:"width:100%;min-width:12ch;font-size:0.85em;text-align:center;display:flex;align-items:center;justify-content:center;" }, []);
+    const picker = el("input", { class:"act-date-picker", type:"date", value, disabled, style:"width:100%;min-width:12ch;font-size:0.85em;text-align:center;" }, []);
 
     const isOverdue = !!((ctx && ctx.overdue) || (ctx && ctx.mods && ctx.mods.overdue));
     if (isOverdue) {
-      const s = "border:3px solid red;";
-      try { display.style.border = "3px solid red"; } catch(e) {}
-      try { picker.style.border = "3px solid red"; } catch(e) {}
+      // Only show overdue border when a valid date exists and it is before today.
+      let overdueNow = false;
+      try{
+        const v = String(value || "").trim();
+        if (v) {
+          const d = new Date(v + "T00:00:00");
+          const today = new Date();
+          today.setHours(0,0,0,0);
+          if (!isNaN(d.getTime()) && d.getTime() < today.getTime()) overdueNow = true;
+        }
+      }catch(e){}
+      const border = overdueNow ? "3px solid red" : "";
+      try { display.style.border = border; } catch(e) {}
+      try { picker.style.border = border; } catch(e) {}
     }
 
     function openPicker() {
@@ -285,7 +360,7 @@
     const value = normalizeValue("week", ctx && ctx.value);
     const label = value ? ("v" + value.slice(-2)) : "--";
 
-    const display = el("div", { class:"week-display", style:"width:100%;justify-content:flex-start;" }, [
+    const display = el("div", { class:"week-display", style:"width:100%;min-width:10ch;display:flex;align-items:center;justify-content:center;" }, [
       el("span", { text: label }, [])
     ]);
 
@@ -302,6 +377,45 @@
       const key = dt ? isoWeekKeyFromDate(dt) : "";
       display.querySelector("span").textContent = key ? ("v" + key.slice(-2)) : "--";
       if (ctx && typeof ctx.onChange === "function") ctx.onChange(key);
+    });
+
+    const inner = el("div", { class:"act-date-wrap", style:"width:100%;" }, [display, picker]);
+    return wrapActField(inner, ctx);
+  }
+
+
+  function quarterFromDate(dtUtc) {
+    try {
+      const m = dtUtc.getUTCMonth() + 1;
+      if (m <= 3) return "Q1";
+      if (m <= 6) return "Q2";
+      if (m <= 9) return "Q3";
+      return "Q4";
+    } catch (e) { return ""; }
+  }
+
+  function renderQuarter(ctx) {
+    const disabled = !!(ctx && ctx.disabled);
+    const value = normalizeValue("quarter", ctx && ctx.value);
+    const label = value || "--";
+
+    const display = el("div", { class:"quarter-display", style:"width:100%;min-width:10ch;display:flex;align-items:center;justify-content:center;" }, [
+      el("span", { text: label }, [])
+    ]);
+
+    const picker = el("input", { class:"act-date-picker", type:"date", value:"", disabled }, []);
+    function openPicker() {
+      if (disabled) return;
+      try { if (picker.showPicker) picker.showPicker(); } catch (e) {}
+      try { picker.focus(); picker.click(); } catch (e) {}
+    }
+    display.addEventListener("click", openPicker);
+
+    picker.addEventListener("change", function () {
+      const dt = parseDateYYYYMMDD(picker.value);
+      const q = dt ? quarterFromDate(dt) : "";
+      display.querySelector("span").textContent = q || "--";
+      if (ctx && typeof ctx.onChange === "function") ctx.onChange(q);
     });
 
     const inner = el("div", { class:"act-date-wrap", style:"width:100%;" }, [display, picker]);
@@ -337,11 +451,28 @@
   // VERSION 103: ToDo kategori dropdown (fixed list)
   
   // VERSION 109: Projekt kategori dropdown (fixed list)
-  const PROJECT_CATEGORIES = ["kundprojekt","volymprojekt","samarbetsprojekt"];
+  const PROJECT_CATEGORIES = getRegistryValues("projektkategori", ["kundprojekt","volymprojekt","samarbetsprojekt"]);
 
   // Produktkategori från register (state.settings)
-  function getProduktkategoriRegisterValues() {
+  
+  function getRegistryValues(name, fallbackArr) {
     try {
+      const cfg = (App && App.Config) ? App.Config : null;
+      const a =
+        (cfg && cfg.registers && Array.isArray(cfg.registers[name])) ? cfg.registers[name] :
+        (cfg && cfg.DEFAULT_REGISTRIES && Array.isArray(cfg.DEFAULT_REGISTRIES[name])) ? cfg.DEFAULT_REGISTRIES[name] :
+        null;
+      if (a && a.length) return a.map(x => String(x)).filter(Boolean);
+    } catch (e) {}
+    if (Array.isArray(fallbackArr) && fallbackArr.length) return fallbackArr.map(x => String(x)).filter(Boolean);
+    return [];
+  }
+
+function getProduktkategoriRegisterValues() {
+    // Prefer App.Config registries
+    const fromCfg = getRegistryValues("produktkategori", null);
+    if (fromCfg && fromCfg.length) return fromCfg;
+try {
       const st = (App && typeof App.getState === "function") ? App.getState() : null;
       const s = st && st.settings ? st.settings : null;
       // allow several possible shapes
@@ -391,11 +522,34 @@
     sel.addEventListener("change", function(){
       if (ctx && typeof ctx.onChange === "function") ctx.onChange(sel.value);
     });
+
+    // Prevent table-level click handlers from hijacking dropdown interaction
+    sel.addEventListener("click", function(e){ try{ e.stopPropagation(); }catch(_){} });
+    sel.addEventListener("pointerdown", function(e){ try{ e.stopPropagation(); }catch(_){} });
     sel.addEventListener("click", function(e){ e.stopPropagation(); });
     return wrapActField(sel, Object.assign({}, ctx || {}, { value }));
   }
 
-const TODO_CATEGORIES = ["Allmänt","Info","Shopify-B2C","Shopify-B2B","Logistik","Privat"];
+  // ToDo kategori dropdown (fixed list)
+  // NOTE: hard-coded to match DEV behavior (no registry dependency)
+  const TODO_CATEGORIES = ["Allmänt","Info","Kontor","Shopify B2C","Shopify B2B","Logistik","Privat"];
+
+// Dev kategori dropdown (fixed list)
+  const DEV_CATEGORIES = getRegistryValues("dropdown_dev_kategori", ["matta","colonnade","tapestry","Softass","design"]);
+
+  // Dev syfte dropdown (fixed list)
+  const DEV_SYFTE = ["kund","samarbete","design"];
+
+  // Project kategori dropdown (fixed list)
+    // Project kategori dropdown (fixed list)
+  // NOTE: hard-coded to match DEV behavior (no registry dependency)
+  const PROJECT_KATEGORIES = ["kund","samarbete","volym","utveckling"];
+
+// Product kategori dropdown (defaults to ToDo categories unless overridden)
+    // Product categories base list (from config registry `produktkategori`)
+  const PRODUCT_CATEGORIES = getRegistryValues("produktkategori", ["matta","tapestry","colonnade","softass","paketering"]);
+
+const PRODUCT_KATEGORIES_DROPDOWN = getRegistryValues("dropdown_product_kategori", (typeof PRODUCT_CATEGORIES !== "undefined" ? PRODUCT_CATEGORIES.slice() : []));
 
   function renderTodoKategori(ctx) {
     const disabled = !!(ctx && ctx.disabled);
@@ -417,6 +571,64 @@ const TODO_CATEGORIES = ["Allmänt","Info","Shopify-B2C","Shopify-B2B","Logistik
   }
 
 
+function renderDropdownRegistry(ctx) {
+  const disabled = !!(ctx && ctx.disabled);
+  const value = String(ctx && ctx.value != null ? ctx.value : "");
+  const reg = String((ctx && (ctx.registry || ctx.reg)) || "");
+  let items = [];
+  try {
+    if (reg && App && App.Config && typeof App.Config.getRegistry === "function") {
+      items = App.Config.getRegistry(reg) || [];
+    }
+  } catch (e) {}
+  
+  // Hard override for known registries that we want to behave exactly like DEV (local list)
+  // This avoids issues where registry/state/config differs between tabs.
+  if (reg === "dropdown_todo_kategori") items = TODO_CATEGORIES.slice();
+  if (reg === "dropdown_project_kategori") items = PROJECT_KATEGORIES.slice();
+  if (reg === "dropdown_dev_syfte") items = DEV_SYFTE.slice();
+
+if (!Array.isArray(items) || items.length === 0) {
+    // Fallbacks for known registries
+    if (reg === "todokategori") items = TODO_CATEGORIES.slice();
+    if (reg === "dropdown_todo_kategori") items = TODO_CATEGORIES.slice();
+    if (reg === "produktkategori") items = PRODUCT_CATEGORIES.slice();
+    if (reg === "dropdown_dev_kategori") items = DEV_CATEGORIES.slice();
+    if (reg === "dropdown_dev_syfte") items = DEV_SYFTE.slice();
+    if (reg === "dropdown_project_kategori") items = PROJECT_KATEGORIES.slice();
+    if (reg === "dropdown_product_kategori") items = PRODUCT_KATEGORIES_DROPDOWN.slice();
+  }
+
+  const sel = el("select", {
+    class: "input dropdown-registry",
+    style: (ctx && ctx.style) ? ctx.style : "width:17ch;min-width:17ch;max-width:17ch;",
+    disabled: disabled ? "disabled" : null
+  }, [
+    el("option", { value: "" }, [""]),
+    ...(items || []).map(v => el("option", { value: v }, [v]))
+  ]);
+
+  sel.value = value;
+
+  // Prevent table-level click handlers from hijacking dropdown interaction
+  sel.addEventListener("pointerdown", function(e){ try{ e.stopPropagation(); }catch(_){} }, true);
+  sel.addEventListener("mousedown", function(e){ try{ e.stopPropagation(); }catch(_){} }, true);
+  sel.addEventListener("touchstart", function(e){ try{ e.stopPropagation(); }catch(_){} }, true);
+  sel.addEventListener("click", function(e){ try{ e.stopPropagation(); }catch(_){} }, true);
+
+  // Also stop in bubble phase for good measure
+  sel.addEventListener("pointerdown", function(e){ try{ e.stopPropagation(); }catch(_){} });
+  sel.addEventListener("mousedown", function(e){ try{ e.stopPropagation(); }catch(_){} });
+  sel.addEventListener("touchstart", function(e){ try{ e.stopPropagation(); }catch(_){} });
+  sel.addEventListener("click", function(e){ try{ e.stopPropagation(); }catch(_){} });
+  sel.addEventListener("change", function(){
+    if (ctx && typeof ctx.onChange === "function") ctx.onChange(sel.value);
+  });
+  sel.addEventListener("click", function(e){ e.stopPropagation(); });
+
+  // Ensure right-click initials/notes binder sees the field wrapper
+  return wrapActField(sel, Object.assign({}, ctx || {}, { value }));
+}
   function renderEditor(ctx) {
     const base = normalizeBaseType(ctx && (ctx.baseType || ctx.type));
     const val = normalizeValue(base, ctx && ctx.value);
@@ -424,6 +636,14 @@ const TODO_CATEGORIES = ["Allmänt","Info","Shopify-B2C","Shopify-B2B","Logistik
 
     if (base === "date") return renderDate(next);
     if (base === "week") return renderWeek(next);
+    if (base === "quarter") return renderQuarter(next);
+    
+if (base === "dropdown_registry") {
+  // If a specific dropdown_* key was used as the field type, pass it through as registry id
+  const t0 = normStr(ctx && (ctx.type || ctx.baseType)).toLowerCase();
+  if (t0.startsWith("dropdown_")) next.registry = t0;
+  return renderDropdownRegistry(next);
+}
     if (base === "produktkategori") return renderProduktkategori(next);
     if (base === "dropdown_produktkategori") return renderDropdownProduktkategori(next);
     if (base === "projektkategori") return renderProjektkategori(next);
@@ -438,9 +658,12 @@ const TODO_CATEGORIES = ["Allmänt","Info","Shopify-B2C","Shopify-B2B","Logistik
     { key:"status", label:"Status" },
     { key:"date", label:"Datum" },
     { key:"week", label:"Vecka" },
+    { key:"quarter", label:"Kvartal" },
     { key:"produktkategori", label:"Produktkategori (fast lista)" },
     { key:"dropdown_produktkategori", label:"Produktkategori (register)" },
-    { key:"todokategori", label:"ToDo-kategori" },
+    { key:"todokategori", label:"ToDo-kategori (fast lista)" },
+    { key:"dropdown_registry", label:"Dropdown (register)" },
+    { key:"dropdown_todo_kategori", label:"ToDo-kategori (register)" },
   ];
 
   const modList = [

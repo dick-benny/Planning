@@ -40,20 +40,30 @@
   function normStr(s) { return String(s || "").trim(); }
 
   function normalizeSchema(schema) {
+    // Prefer centralized schema normalization (App.Schema) when available.
+    try{
+      if (USP && USP.App && USP.App.Schema && typeof USP.App.Schema.normalizeSchema === "function") {
+        return USP.App.Schema.normalizeSchema(schema);
+      }
+    }catch(e){}
     const s = deepClone(schema || { fields: [] });
     s.fields = Array.isArray(s.fields) ? s.fields : [];
     s.fields = s.fields.map((f, idx) => {
       const o = Object.assign({}, f || {});
-      if (!o.name && o.key) o.name = o.key; // legacy migrate
+      if (!o.name && o.key) o.name = o.key;
       delete o.key;
       o.name = normStr(o.name) || ("Fält " + (idx + 1));
-      o.type = normStr(o.type) || "text";
+      const tRaw = normStr(o.type) || "text";
+      o.type = tRaw.includes("+") ? tRaw.split("+")[0] : tRaw;
       o.order = Number.isFinite(o.order) ? o.order : idx;
-      if (!o.id) o.id = uid("f");
+      if (!o.id) o.id = "f_" + Date.now() + "_" + idx;
+      // Normalize mods/addons in bootstrap too (fallback)
+      o.mods = (USP && USP.App && USP.App.Schema && typeof USP.App.Schema.normalizeFieldMods === "function")
+        ? USP.App.Schema.normalizeFieldMods(o)
+        : (o.mods || {});
       return o;
-    }).sort((a,b)=> (a.order??0)-(b.order??0));
-    s.fields = migrateFieldTypeToMods(dedupeFieldNames(s.fields));
-    s.fields.forEach((f,i)=>{ f.order=i; });
+    }).sort((a,b) => (a.order ?? 0) - (b.order ?? 0));
+    s.fields.forEach((f,i)=>{ f.order = i; });
     return s;
   }
 
@@ -198,6 +208,11 @@
       // Optional deterministic override (debug/local): "admin" | "user" | ""
       forceRole: "",
 
+      // If true: reuse stored auth session and skip login screen on startup.
+      // Default false: always show login screen on startup.
+      autoLogin: false,
+
+
       // Local user directory (for Change user / Manage users)
       users: [
         { id: "u_dick", username:"dick", name: "Dick Eriksson", initials:"DE", email: "d.eriksson@cappelendimyr.com", role:"admin" },
@@ -257,6 +272,154 @@
            (dir[0] || null) ||
            { id: "u_admin", name: "Dick Eriksson", email: "d.eriksson@cappelendimyr.com" };
   }
+
+
+
+// ---------------------------
+// Auth helpers (login/localStorage based)
+// ---------------------------
+function getAuthApi(){
+  try{
+    if (window.USP && window.USP.Auth) return window.USP.Auth;
+  }catch(e){}
+  return null;
+}
+
+function getCurrentAuthUser(){
+  try{
+    var api = getAuthApi();
+    if (api && typeof api.currentUser === "function") return api.currentUser();
+  }catch(e){}
+  try{
+    if (typeof currentUser === "function") return currentUser();
+  }catch(e2){}
+  return null;
+}
+
+function ensureUserFromAuth(state, authUser){
+  var st = state || defaultState();
+  var au = authUser || {};
+  var username = String(au.username || au.email || au.name || "User").trim();
+  var role = String(au.role || "").trim() || "user";
+  var initials = String(au.initials || "").trim();
+  if (!initials) {
+    try{ initials = (username.split(/\s+/)[0].charAt(0) + username.split(/\s+/).slice(-1)[0].charAt(0)).toUpperCase(); }catch(eI){ initials = ""; }
+  }
+
+  st.settings = st.settings || defaultSettings();
+  st.settings.users = Array.isArray(st.settings.users) ? st.settings.users : [];
+  var existing = null;
+  for (var i=0;i<st.settings.users.length;i++){
+    var u = st.settings.users[i];
+    if (!u) continue;
+    if (au.id && String(u.id) === String(au.id)) { existing = u; break; }
+    if (au.email && u.email && String(u.email).toLowerCase() === String(au.email).toLowerCase()) { existing = u; break; }
+    if (u.username && String(u.username).toLowerCase() === String(username).toLowerCase()) { existing = u; break; }
+  }
+
+  if (!existing){
+    existing = {
+      id: au.id ? String(au.id) : uid("u"),
+      username: username,
+      name: String(au.name || username),
+      initials: initials,
+      email: String(au.email || ""),
+      role: role
+    };
+    st.settings.users.push(existing);
+  } else {
+    // keep fresh
+    if (!existing.initials && initials) existing.initials = initials;
+    if (role) existing.role = role;
+    if (au.email && !existing.email) existing.email = String(au.email);
+    if (au.name && !existing.name) existing.name = String(au.name);
+  }
+  return existing;
+}
+
+function startServerHydration(){
+  try{
+    if (getDataMode() !== "local" && App.DB && typeof App.DB.loadState === "function") {
+      console.log("🚀 Starting state hydration from server...");
+      App.DB.loadState().then(function (remote) {
+        console.log("🔄 Hydrating state from server...", remote);
+        if (!remote || typeof remote !== "object") {
+          console.warn("⚠️ No remote state or invalid format:", remote);
+          _hydrationComplete = true;
+          return;
+        }
+        var cur = App.getState();
+        var merged = deepClone(cur);
+        if (remote.schemas) merged.schemas = remote.schemas;
+        if (remote.data) merged.data = remote.data;
+        if (remote.settings) merged.settings = remote.settings;
+        merged.updatedAt = remote.updatedAt || merged.updatedAt || nowIso();
+        _hydrationComplete = true;
+        App.commitState(merged);
+        try{ if (USP.UI && typeof USP.UI.render === "function") USP.UI.render(App.getState()); }catch(eR){}
+      }).catch(function(err){
+        console.error("DB loadState error:", err);
+        _hydrationComplete = true;
+      });
+    }
+  }catch(eH){
+    _hydrationComplete = true;
+  }
+}
+
+// Public hook called by UI after successful login
+App.setLoggedInUser = function(user){
+  try{
+    var st = App.getState ? App.getState() : (_state || defaultState());
+    st.session = st.session || {};
+    st.ui = st.ui || {};
+    var acting = ensureUserFromAuth(st, user);
+    st.session.authUser = acting;
+    st.session.actingUserId = String(acting.id || "");
+    st.user = acting;
+    delete st.ui.screen; // leave login screen
+    st.updatedAt = nowIso();
+    App.commitState(st);
+    try{ if (USP.UI && typeof USP.UI.render === "function") USP.UI.render(App.getState()); }catch(eR2){}
+    // After login: hydrate remote state in server mode
+    startServerHydration();
+    return true;
+  }catch(e){
+    return false;
+  }
+};
+
+// Public: Logout (works for both role=user and role=admin)
+// - Clears auth session
+// - Switches UI to login overlay
+App.logout = function logout(){
+  try{
+    if (window.USP && window.USP.Auth && typeof window.USP.Auth.logout === "function") {
+      window.USP.Auth.logout();
+    } else if (typeof logout === "function") {
+      // legacy global
+      logout();
+    }
+  }catch(e){}
+
+  try{
+    var st = App.getState ? (App.getState() || defaultState()) : (_state || defaultState());
+    st.session = st.session || {};
+    st.ui = st.ui || {};
+
+    st.session.authUser = null;
+    st.session.actingUserId = "";
+    // keep tab selection but force login screen
+    st.ui.screen = "login";
+    st.updatedAt = nowIso();
+    App.commitState(st);
+
+    try{ if (USP && USP.UI && typeof USP.UI.render === "function") USP.UI.render(App.getState()); }catch(eR){}
+    return true;
+  }catch(e2){
+    return false;
+  }
+};
 
   // ---------------------------
   // Role detection (single source of truth)
@@ -370,6 +533,13 @@
     st.ui.tab = st.ui.tab || App.Tabs.TODO;
 
     st.schemas = st.schemas || defaultSchemas();
+
+    // Normalize all schemas (adds canonical `mods` etc.)
+    try{
+      Object.keys(st.schemas || {}).forEach((k) => {
+        st.schemas[k] = normalizeSchema(st.schemas[k]);
+      });
+    }catch(e){}
     st.schemas.dev = st.schemas.dev || { fields: [] };
     if (!Array.isArray(st.schemas.dev.fields) || st.schemas.dev.fields.length === 0) st.schemas.dev = defaultSchemas().dev;
     st.schemas.product = st.schemas.product || { fields: [] };
@@ -456,10 +626,30 @@
   // Schema helpers
   // ---------------------------
   App.getSchema = function getSchema(tabKey, state) {
+    // Fixed tables should follow FixedTables spec, but avoid recursive sync:
+    // ensureSchema() itself calls App.getSchema(), so we use a guard.
     const st = state || _state;
     const k = tabKey || App.getTab(st);
     st.schemas = st.schemas || defaultSchemas();
-    return st.schemas[k] || { fields: [] };
+
+    App.__fixedSchemaSyncing = App.__fixedSchemaSyncing || Object.create(null);
+
+    try {
+      if (!App.__fixedSchemaSyncing[k] &&
+          typeof App.getFixedTableSpec === "function" &&
+          App.getFixedTableSpec(k) &&
+          App.FixedTables && typeof App.FixedTables.ensureSchema === "function") {
+        App.__fixedSchemaSyncing[k] = true;
+        try { App.FixedTables.ensureSchema(k, st); } catch(e) {}
+        App.__fixedSchemaSyncing[k] = false;
+      }
+    } catch(eOuter) {
+      try { App.__fixedSchemaSyncing[k] = false; } catch(_) {}
+    }
+
+    const latest = (typeof App.getState === "function") ? App.getState() : st;
+    latest.schemas = latest.schemas || defaultSchemas();
+    return latest.schemas[k] || { fields: [] };
   };
 
   App.setSchema = function setSchema(tabKey, schema) {
@@ -485,7 +675,15 @@
       }
     });
 
-    st.schemas[tabKey] = res.schema;
+    
+    // Avoid infinite render loops: if schema did not change, don't commit.
+    try{
+      const prevSchema = prev || { fields: [] };
+      const a = JSON.stringify(prevSchema);
+      const b = JSON.stringify(res.schema);
+      if (a === b) return _state;
+    }catch(e){}
+st.schemas[tabKey] = res.schema;
     return App.commitState(st);
   };
 
@@ -498,6 +696,89 @@
     st.data = st.data || defaultData();
     return Array.isArray(st.data[k]) ? st.data[k] : [];
   };
+
+  // ---------------------------
+  // ToDo visibility filters (non-destructive)
+  // - Enforce "Privat" visibility: only creator/owner can see private ToDo rows
+  // - Support "Mina ToDo" via state.session.todoOnlyMine (filters to creator/owner)
+  // This is implemented here (data helper) so it applies consistently regardless of UI renderer.
+  // Toggle debug with: localStorage.USP_DEBUG_TODO=1
+  // ---------------------------
+  (function () {
+    const _origListRows = App.listRows;
+    function _normStr(v) { return (v == null) ? "" : String(v); }
+    function _lower(v) { return _normStr(v).toLowerCase(); }
+
+    function _getMe(st) {
+      // Prefer explicit current user id getter if present
+      const meId = (typeof App.getCurrentUserId === "function") ? App.getCurrentUserId(st) : (st && st.session && st.session.userId);
+      const me = (typeof App.getActingUser === "function") ? App.getActingUser(st) : (typeof App.getAuthUser === "function" ? App.getAuthUser(st) : null);
+      const meInitials = (me && (me.initials || me.Initials)) || (st && st.session && st.session.initials) || "";
+      const meEmail = (me && (me.email || me.Email)) || (st && st.session && st.session.email) || "";
+      return { meId, meInitials: _normStr(meInitials), meEmail: _normStr(meEmail) };
+    }
+
+    function _rowOwnerSignals(row) {
+      const meta = (row && row.meta) ? row.meta : {};
+      const fields = (row && row.fields) ? row.fields : {};
+      return {
+        owner: _normStr(meta.owner || meta.Owner),
+        createdById: _normStr(meta.createdById || meta.created_by_id || meta.createdBy || meta.created_by),
+        createdByEmail: _normStr(meta.createdByEmail || meta.created_by_email),
+        createdByInitials: _normStr(meta.createdByInitials || meta.created_by_initials),
+        descInitials: _normStr(fields["Beskrivning__initials"] || fields["beskrivning__initials"] || fields["Description__initials"])
+      };
+    }
+
+    function _isMineRow(row, me) {
+      const s = _rowOwnerSignals(row);
+      if (me.meId && (s.createdById === me.meId || s.owner === me.meId)) return true;
+      if (me.meEmail && s.createdByEmail && _lower(s.createdByEmail) === _lower(me.meEmail)) return true;
+      if (me.meInitials) {
+        if (s.createdByInitials && _lower(s.createdByInitials) === _lower(me.meInitials)) return true;
+        // last resort: description initials (legacy / editor-generated)
+        if (s.descInitials && _lower(s.descInitials) === _lower(me.meInitials)) return true;
+      }
+      return false;
+    }
+
+    function _isPrivateTodo(row) {
+      const fields = (row && row.fields) ? row.fields : {};
+      const cat = fields.Kategori ?? fields.kategori ?? fields.Category ?? fields.category ?? "";
+      return _lower(cat) === "privat";
+    }
+
+    function _dbgEnabled() {
+      try { return String(localStorage.getItem("USP_DEBUG_TODO") || "0") === "1"; } catch (e) { return false; }
+    }
+
+    App.listRows = function listRowsFiltered(tabKey, state) {
+      const st = state || _state;
+      const k = tabKey || App.getTab(st);
+      const rows = _origListRows(k, st);
+
+      // Only apply for ToDo tab/table
+      if (_lower(k) !== "todo") return rows;
+
+      const me = _getMe(st);
+      const onlyMine = !!(st && st.session && st.session.todoOnlyMine);
+
+      let out = rows;
+
+      // Always enforce private visibility
+      out = out.filter(r => !_isPrivateTodo(r) || _isMineRow(r, me));
+
+      // Apply "Mina ToDo" when enabled
+      if (onlyMine) out = out.filter(r => _isMineRow(r, me));
+
+      if (_dbgEnabled()) {
+        try {
+          console.log("[App.listRows][TODO] filtered", { before: rows.length, after: out.length, onlyMine, meId: me.meId, meInitials: me.meInitials });
+        } catch (e) {}
+      }
+      return out;
+    };
+  })();
 
   App.upsertRow = function upsertRow(tabKey, row) {
     const st = deepClone(_state || defaultState());
@@ -669,27 +950,40 @@ App.listUsers = function listUsers(state) {
       _hydrationComplete = true;
     }
 
-    // Attach auth user (controls role) + acting user (impersonation)
-    _state.session = _state.session || { authUser: null, actingUserId: "" };
-    const authUser = loadAdminUser(_state);
-    _state.session.authUser = authUser;
-    _state.session.roleMode = "admin";
+    // Attach auth user (controls role) + acting user
+_state.session = _state.session || { authUser: null, actingUserId: "" };
+_state.ui = _state.ui || {};
 
-    const acting = loadOrCreateLocalUser(_state);
-    // Ensure deterministic default: Dick
-    const actingId = String(acting && acting.id ? acting.id : "u_dick");
-    _state.session.actingUserId = actingId || "u_dick";
-    _state.user = acting || loadAdminUser(_state);
+var cu = getCurrentAuthUser();
+var autoLogin = !!(App && App.Config && App.Config.autoLogin);
 
-    
-    // Use acting user as the "logged in" auth user in local demo
-    _state.session.authUser = _state.user;
-// Persist user into state so it survives tab switches (but not in server mode - we load from server first)
-    if (getDataMode() === "local") {
-      persistState(_state);
+// Default UX: always show the defined login screen on startup.
+// If autoLogin=true, we will attach the existing auth session automatically.
+if (autoLogin && cu) {
+  var acting = ensureUserFromAuth(_state, cu);
+  _state.session.authUser = acting;
+  _state.session.actingUserId = String(acting.id || "");
+  _state.user = acting;
+  delete _state.ui.screen;
+} else {
+  // Force login overlay at start (even if there is an old session in localStorage)
+  try{
+    if (!autoLogin && cu && window.USP && window.USP.Auth && typeof window.USP.Auth.logout === "function") {
+      window.USP.Auth.logout();
     }
+  }catch(e){}
+  _state.session.authUser = null;
+  _state.session.actingUserId = "";
+  _state.user = null;
+  _state.ui.screen = "login";
+}
 
-    // Ensure base UI exists
+// Persist state in local mode (login screen also persists so refresh keeps it)
+if (getDataMode() === "local") {
+  persistState(_state);
+}
+
+// Ensure base UI exists
     if (USP.UI && typeof USP.UI.mountBase === "function") {
       USP.UI.mountBase();
     }
@@ -698,40 +992,12 @@ App.listUsers = function listUsers(state) {
     if (USP.UI && typeof USP.UI.render === "function") {
       USP.UI.render(_state);
 
-    // Server mode: hydrate state from DB after first paint
-    try {
-      if (getDataMode() !== "local" && App.DB && typeof App.DB.loadState === "function") {
-        console.log("🚀 Starting state hydration from server...");
-        App.DB.loadState().then(function (remote) {
-          console.log("🔄 Hydrating state from server...", remote);
-          if (!remote || typeof remote !== "object") {
-            console.warn("⚠️ No remote state or invalid format:", remote);
-            _hydrationComplete = true; // Allow saves even if no remote data
-            return;
-          }
-          // Merge remote into current state (keep session/auth from local init)
-          const cur = App.getState();
-          console.log("📊 Current state before merge:", cur);
-          const merged = deepClone(cur);
-          if (remote.schemas) merged.schemas = remote.schemas;
-          if (remote.data) merged.data = remote.data;
-          if (remote.settings) merged.settings = remote.settings;
-          merged.updatedAt = remote.updatedAt || merged.updatedAt || nowIso();
-          console.log("✅ State hydrated, committing...", merged);
-          _hydrationComplete = true; // Allow saves after hydration
-          App.commitState(merged);
-        }).catch(function (e) {
-          console.error("❌ DB.loadState failed:", e);
-          _hydrationComplete = true; // Allow saves even on error
-        });
-      } else {
-        console.log("ℹ️ Skipping remote hydration - mode:", getDataMode());
-        _hydrationComplete = true;
-      }
-    } catch (e) { 
-      console.error("❌ hydrateFromRemote setup failed:", e);
-      _hydrationComplete = true;
-    }
+    // Server mode: hydrate state from DB after first paint (only after login)
+try{
+  if (_state && _state.session && _state.session.authUser) startServerHydration();
+  else _hydrationComplete = true;
+}catch(eH2){ _hydrationComplete = true; }
+
 
     }
 
@@ -747,24 +1013,10 @@ App.listUsers = function listUsers(state) {
     }
     if (USP.UI && typeof USP.UI.render === "function") USP.UI.render(_state);
 
-    // Server mode: hydrate state from DB after first paint
-    try {
-      if (getDataMode() !== "local" && App.DB && typeof App.DB.loadState === "function") {
-        App.DB.loadState().then(function (remote) {
-          if (!remote || typeof remote !== "object") return;
-          // Merge remote into current state (keep session/auth from local init)
-          const cur = App.getState();
-          const merged = deepClone(cur);
-          if (remote.schemas) merged.schemas = remote.schemas;
-          if (remote.data) merged.data = remote.data;
-          if (remote.settings) merged.settings = remote.settings;
-          merged.updatedAt = remote.updatedAt || merged.updatedAt || nowIso();
-          App.commitState(merged);
-        }).catch(function (e) {
-          console.warn("DB.loadState failed", e);
-        });
-      }
-    } catch (e) { console.warn("hydrateFromRemote setup failed", e); }
+    // Server mode: hydrate state from DB after first paint (only after login)
+try{
+  if (_state && _state.session && _state.session.authUser) startServerHydration();
+}catch(eH3){}
 
   };
 

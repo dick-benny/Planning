@@ -19,6 +19,51 @@
 
   function normStr(s) { return String(s || "").trim(); }
 
+
+  function normalizeFieldMods(field) {
+    const f = field || {};
+    const mods = Object.create(null);
+
+    function addFlag(k, v) {
+      if (!k) return;
+      const key = String(k).trim();
+      if (!key) return;
+      if (v === false) { mods[key] = false; return; }
+      if (v) mods[key] = true;
+    }
+
+    // 1) Parse type add-ons: "text+notes+initials"
+    const typeRaw = normStr(f.type);
+    if (typeRaw.includes("+")) {
+      typeRaw.split("+").slice(1).forEach((p) => addFlag(p, true));
+    }
+
+    // 2) Existing mods/addons structures
+    const candidates = [f.mods, f.addons];
+    candidates.forEach((x) => {
+      if (!x) return;
+      if (Array.isArray(x)) x.forEach((k) => addFlag(k, true));
+      else if (typeof x === "object") Object.keys(x).forEach((k) => addFlag(k, x[k]));
+      else if (typeof x === "string") x.split(/[,+\s]+/).forEach((k) => addFlag(k, true));
+    });
+
+    // 3) Top-level legacy booleans
+    ["notes","initials","corner","status","progress","lock","readonly","required","notesOnInitialsRightClick"].forEach((k) => {
+      if (k in f) addFlag(k, !!f[k]);
+    });
+
+    // Canonical keys (lowercase)
+    const out = {};
+    Object.keys(mods).forEach((k) => { out[String(k).toLowerCase()] = mods[k]; });
+
+    // Default: if initials+notes exist and not explicitly disabled -> allow right-click notes
+    if (out.initials && out.notes && out.notesoninitialsrightclick !== false) {
+      out.notesoninitialsrightclick = true;
+    }
+
+    return out;
+  }
+
   App.Schema.fieldKey = function fieldKey(field) {
     return normStr(field && field.name);
   };
@@ -33,8 +78,11 @@
         if (!o.name && o.key) o.name = o.key;
         delete o.key; // enforce: no key property
         o.name = normStr(o.name) || ("Fält " + (idx + 1));
-        o.type = normStr(o.type) || "text";
+        const tRaw = normStr(o.type) || "text";
+        o.type = tRaw.includes("+") ? tRaw.split("+")[0] : tRaw;
         o.order = Number.isFinite(o.order) ? o.order : idx;
+        o.mods = normalizeFieldMods(o);
+        // Keep legacy properties for now, but prefer `mods` everywhere.
         if (!o.id) o.id = "f_" + Date.now() + "_" + idx;
         return o;
       })

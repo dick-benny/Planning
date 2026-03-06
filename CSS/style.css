@@ -1175,6 +1175,7 @@ body{
   background: inherit; /* match field color */
   border:3px solid currentColor; /* sharp, matching edge */
   cursor:pointer;
+  z-index: 5;
 }
 
 .act-field.status-green{ background:#ecfdf5; }
@@ -1595,11 +1596,6 @@ body{
 }
 
 /* Dark blue ring when notes exist */
-.act-initials.is-notes{
-  border: 2px solid #0b3d91;
-  color: #0b3d91;
-}
-
 /* Keep notes icon rules from v231, but ensure color works on light bg */
 .note-icon{
   color: rgba(15,23,42,.55);
@@ -2051,3 +2047,368 @@ table.table select{
   background: var(--bg, inherit) !important;
 }
 
+
+
+/* === USP patch v244: content-surface/inner panel matches background === */
+:root{
+  /* If you already have --bg defined earlier, this keeps it. */
+  --usp-surface: var(--bg, #f7f2d8);
+}
+
+/* Big white panels in views */
+#usp-view,
+.table-wrap,
+#usp-view .hero,
+#usp-view .grid{
+  background: var(--usp-surface) !important;
+}
+
+/* Ensure header row matches background too */
+#usp-view .grid thead,
+#usp-view .grid thead tr,
+#usp-view .grid thead th{
+  background: var(--usp-surface) !important;
+}
+
+/* Remove any default “card” surface */
+#usp-view .hero{
+  box-shadow: none !important;
+}
+
+/* Keep inputs readable (still white) */
+#usp-view input,
+#usp-view select,
+#usp-view textarea,
+#usp-view .input{
+  background: #fff !important;
+}
+
+
+
+/* === USP patch v245: Corner marker default grey === */
+
+/* Default corner marker */
+.has-corner-marker::after,
+.corner-marker,
+.act-corner {
+  border-top-color: #7f7f7f !important;   /* grey */
+  border-right-color: #7f7f7f !important;
+}
+
+/* If active/important state exists, keep blue */
+.has-corner-marker.is-active::after,
+.has-corner-marker.active::after {
+  border-top-color: #1f4fff !important;
+  border-right-color: #1f4fff !important;
+}
+
+
+/* === USP patch v246: darker default corner marker grey === */
+
+
+/* --- v252 overrides: restore topbar layout + keep classic table look --- */
+#usp-topbar.topbar{
+  display:flex;
+  align-items:center;
+  gap:16px;
+}
+#usp-topbar .tabs{
+  display:flex;
+  align-items:center;
+  gap:8px;
+}
+#usp-topbar .top-actions{
+  margin-left:auto;
+  display:flex;
+  align-items:center;
+  gap:10px;
+}
+#usp-topbar .brand{
+  display:flex;
+  align-items:center;
+  gap:10px;
+}
+
+/* ensure main surfaces follow background tone (no harsh white) */
+body{
+  background: var(--bg, #fbf7df);
+}
+.table-wrap, #usp-view, #usp-view .hero, #usp-view .inner-panel, #usp-view .content-surface{
+  background: var(--bg, #fbf7df);
+}
+
+/* USP update v11: neutral (gray) status corner */
+.act-status-corner{
+  background:#f3f4f6 !important;
+}
+.act-field.status-gray .act-status-corner{
+  background:#f3f4f6 !important;
+}
+
+/* === USP: Initials ring should be filled light blue when notes exist === */
+button.act-initials.is-notes,
+.act-initials.is-notes{
+  background-color:#dbeafe !important; /* light blue fill */
+  border:2px solid #0b3d91 !important;
+  color:#0b3d91 !important;
+}
+
+
+
+/* === USP patch v301: Triangle corner marker like Project tab (for mods.corner) ===
+   - Used by app_09_fieldtypes.js when baseType != status and onCornerChange exists.
+   - Draws a triangle inside the field (no negative offsets), avoids clipping in usp-table.
+*/
+.act-field{ position:relative; }
+
+.act-corner{
+  position:absolute;
+  top:0;
+  left:0;
+  width:18px;
+  height:18px;
+  background:transparent;
+  border:0;
+  padding:0;
+  cursor:pointer;
+  z-index:6;
+}
+
+.act-corner::after{
+  content:"";
+  position:absolute;
+  top:0;
+  left:0;
+  width:0;
+  height:0;
+  border-top:18px solid #7f7f7f;   /* default grey */
+  border-right:18px solid #7f7f7f;
+  border-bottom:0;
+  border-left:0;
+}
+
+/* Color follows chosen corner status on wrapper */
+.act-field.status-green .act-corner::after{
+  border-top-color:#10b981;
+  border-right-color:#10b981;
+}
+.act-field.status-yellow .act-corner::after{
+  border-top-color:#f59e0b;
+  border-right-color:#f59e0b;
+}
+.act-field.status-red .act-corner::after{
+  border-top-color:#ef4444;
+  border-right-color:#ef4444;
+}
+
+
+/* USP tables: allow overlapping corner button */
+.usp-table td, .usp-table th{ overflow: visible; position: relative; }
+
+
+/* === Explicit neutral corner override === */
+.act-status-corner,
+.act-status-corner.neutral,
+.act-field.status-neutral .act-status-corner {
+    background-color: #D9D9D9 !important;
+    border-color: #D9D9D9 !important;
+}
+
+
+/* R-notes-dot (fix): note-icon buttons should not inherit full-width menu button styles */
+button.note-icon{
+  display: inline-flex !important;
+  width: 22px !important;
+  height: 22px !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  align-items: center;
+  justify-content: center;
+  text-align: center !important;
+  font-weight: 700 !important;
+  position: relative;
+}
+
+/* small filled blue dot when notes exist */
+button.note-icon.is-notes::after{
+  content: "";
+  position: absolute;
+  top: -1px;
+  right: -1px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background-color: #3b82f6;
+  border: 1px solid #2563eb;
+}
+
+
+/* =========================================================
+   USP Login overlay (planning + local)
+   ========================================================= */
+
+.usp-login-overlay{
+  position:fixed;
+  inset:0;
+  background:rgba(0,0,0,.35);
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  padding:22px;
+  z-index: 999999;
+}
+
+.usp-login-card{
+  width:min(520px, 100%);
+  background:#ffffff;
+  border-radius:28px;
+  box-shadow:0 24px 70px rgba(0,0,0,.22);
+  padding:24px 22px 22px;
+  position:relative;
+  color:#0f172a;
+}
+
+.usp-login-close{
+  position:absolute;
+  right:14px;
+  top:12px;
+  width:40px;
+  height:40px;
+  border-radius:999px;
+  border:1px solid rgba(15,23,42,.14);
+  background:transparent;
+  cursor:pointer;
+  font-size:26px;
+  line-height:38px;
+  color:rgba(15,23,42,.65);
+}
+.usp-login-close:hover{ background:rgba(15,23,42,.05); }
+
+.usp-login-icon{
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  margin-top: 6px;
+}
+
+.usp-login-title{
+  text-align:center;
+  font-size:28px;
+  font-weight:900;
+  margin: 14px 0 16px;
+  letter-spacing:.2px;
+}
+
+.usp-login-form{
+  display:flex;
+  flex-direction:column;
+  gap: 16px;
+}
+
+.usp-login-field{ display:flex; flex-direction:column; gap: 6px; }
+
+.usp-login-input{
+  width:100%;
+  border-radius:6px;
+  border:2px solid #ef4444;
+  padding:16px 14px;
+  font-size:18px;
+  outline:none;
+  color:#0f172a;
+  background:#fff;
+}
+.usp-login-input:focus{
+  box-shadow:0 0 0 4px rgba(239,68,68,.10);
+}
+
+.usp-login-passwrap{ position:relative; }
+.usp-login-eye{
+  position:absolute;
+  right:14px;
+  top:14px;
+  width:40px;
+  height:40px;
+  border-radius:10px;
+  border:none;
+  background:transparent;
+  cursor:pointer;
+  color:rgba(15,23,42,.55);
+}
+.usp-login-eye:hover{ background:rgba(15,23,42,.05); }
+
+.usp-login-msg{
+  min-height: 16px;
+  font-size: 13px;
+  color: rgba(15,23,42,.55);
+}
+.usp-login-msg.is-error{
+  color:#ef4444;
+  font-weight:800;
+}
+
+.usp-login-global{
+  min-height:18px;
+  font-size: 13px;
+  color:#ef4444;
+  font-weight:800;
+  text-align:left;
+}
+
+.usp-login-submit{
+  width:100%;
+  border-radius:999px;
+  padding:18px 16px;
+  font-size:20px;
+  font-weight:900;
+  border:none;
+  cursor:pointer;
+  background:#0ea44a;
+  color:#fff;
+}
+.usp-login-submit:hover{ filter:brightness(0.98); }
+
+@media (max-width: 480px){
+  .usp-login-title{ font-size:24px; }
+  .usp-login-input{ font-size:16px; padding:14px 12px; }
+  .usp-login-submit{ font-size:18px; padding:16px 14px; }
+}
+
+
+/* === Center tabs in topbar (brand left, actions right) === */
+.topbar{
+  display:flex;
+  align-items:center;
+  gap:16px;
+}
+.topbar > .brand{
+  flex:0 0 auto;
+}
+.topbar > .tabs{
+  flex:1 1 auto;
+  display:flex;
+  justify-content:center;
+  align-items:center;
+  gap:12px;
+}
+.topbar > .top-actions{
+  flex:0 0 auto;
+  display:flex;
+  align-items:center;
+  justify-content:flex-end;
+  gap:10px;
+}
+
+/* === Mina ToDo active (strong override) === */
+button.btn-mine-active,
+.btn.btn-mine-active,
+.pill.btn-mine-active,
+.btn-mine-active{
+  background: linear-gradient(135deg,#22c55e,#16a34a) !important;
+  border: none !important;
+  color: #fff !important;
+  box-shadow: 0 0 0 1px rgba(34,197,94,.25) inset !important;
+}
+button.btn-mine-active:hover,
+.btn.btn-mine-active:hover,
+.pill.btn-mine-active:hover,
+.btn-mine-active:hover{ filter: brightness(1.05); }
