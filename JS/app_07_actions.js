@@ -147,6 +147,12 @@
     }
 
     if (act === "remove") {
+      try {
+        if (window.__uspSkipNextRemoveConfirm) {
+          window.__uspSkipNextRemoveConfirm = false;
+          return hardDelete(tabKey, row.id);
+        }
+      } catch(e) {}
       const ok = window.confirm("Ta bort raden?");
       if (!ok) return false;
       return hardDelete(tabKey, row.id);

@@ -237,6 +237,8 @@
       schemas: defaultSchemas(),
       data: defaultData(),
       settings: defaultSettings(),
+      messages: [],
+      messageThreads: [],
     };
   }
 
@@ -556,6 +558,47 @@ App.logout = function logout(){
     st.data.routines = Array.isArray(st.data.routines) ? st.data.routines : [];
 
     st.settings = mergeShallowKeepDefined(defaultSettings(), st.settings || {});
+    st.messages = Array.isArray(st.messages) ? st.messages : [];
+    st.messageThreads = Array.isArray(st.messageThreads) ? st.messageThreads : [];
+
+    if (!st.messageThreads.length && st.messages.length) {
+      st.messageThreads = st.messages.map(function(m){
+        const fromId = String((m && m.fromUserId) || "");
+        const toId = String((m && m.toUserId) || "");
+        const createdAt = String((m && m.createdAt) || nowIso());
+        const participants = [];
+        if (fromId) participants.push(fromId);
+        if (toId && participants.indexOf(toId) < 0) participants.push(toId);
+        const subject = String((m && (m.title || (m.content && m.content.title) || (m.payload && m.payload.title))) || "").trim()
+          || String((((m && (m.body || (m.content && m.content.body) || (m.payload && m.payload.body))) || "").trim().split(/\r?\n/)[0]) || "").trim()
+          || String(((m && m.context && (m.context.label || m.context.fieldName)) || "Meddelande")).trim()
+          || "Meddelande";
+        const body = String((m && (m.body || (m.content && m.content.body) || (m.payload && m.payload.body))) || "").trim();
+        const unread = String((m && m.status) || "unread") !== "read";
+        const unreadBy = {};
+        participants.forEach(function(uid){
+          unreadBy[uid] = (uid === toId) ? unread : false;
+        });
+        return {
+          id: String((m && m.threadId) || uid("thr")),
+          subject: subject,
+          context: (m && m.context && typeof m.context === "object") ? deepClone(m.context) : ((m && m.source && typeof m.source === "object") ? deepClone(m.source) : null),
+          participants: participants,
+          createdBy: fromId,
+          createdAt: createdAt,
+          updatedAt: createdAt,
+          deletedFor: [],
+          unreadBy: unreadBy,
+          messages: [{
+            id: String((m && m.id) || uid("msg")),
+            fromUserId: fromId,
+            body: body,
+            createdAt: createdAt
+          }]
+        };
+      });
+    }
+
     st.updatedAt = nowIso();
     return st;
   }
@@ -888,6 +931,150 @@ App.listUsers = function listUsers(state) {
     const dir = (st && st.settings && Array.isArray(st.settings.users)) ? st.settings.users : [];
     return dir.slice();
   };
+
+  App.getUserById = function getUserById(userId, state) {
+    const users = App.listUsers(state);
+    return users.find(function(u){ return u && String(u.id) === String(userId); }) || null;
+  };
+
+  
+App.Messages = App.Messages || {};
+
+App.Messages.listThreadsForUser = function listThreadsForUser(userId, state) {
+  const st = state || _state || defaultState();
+  const uidValue = String(userId || "");
+  const list = Array.isArray(st.messageThreads) ? st.messageThreads.slice() : [];
+  return list.filter(function(thread){
+    if (!thread) return false;
+    const participants = Array.isArray(thread.participants) ? thread.participants.map(String) : [];
+    const deletedFor = Array.isArray(thread.deletedFor) ? thread.deletedFor.map(String) : [];
+    return participants.indexOf(uidValue) >= 0 && deletedFor.indexOf(uidValue) < 0;
+  }).sort(function(a,b){
+    return new Date((b && (b.updatedAt || b.createdAt)) || 0) - new Date((a && (a.updatedAt || a.createdAt)) || 0);
+  });
+};
+
+App.Messages.getThread = function getThread(threadId, state) {
+  const st = state || _state || defaultState();
+  const list = Array.isArray(st.messageThreads) ? st.messageThreads : [];
+  return list.find(function(t){ return t && String(t.id) === String(threadId); }) || null;
+};
+
+App.Messages.listForUser = function listForUser(userId, state) {
+  return App.Messages.listThreadsForUser(userId, state);
+};
+
+App.Messages.getUnreadCount = function getUnreadCount(userId, state) {
+  const uidValue = String(userId || "");
+  return App.Messages.listThreadsForUser(uidValue, state).filter(function(thread){
+    return !!(thread && thread.unreadBy && thread.unreadBy[uidValue]);
+  }).length;
+};
+
+App.Messages.createThread = function createThread(payload) {
+  const st = deepClone(_state || defaultState());
+  st.messageThreads = Array.isArray(st.messageThreads) ? st.messageThreads : [];
+  const me = App.getActingUser(st) || {};
+  const toUserIds = Array.isArray(payload && payload.toUserIds) ? payload.toUserIds : [];
+  const subject = String((payload && (payload.subject || payload.title)) || "").trim();
+  const body = String((payload && payload.body) || "").trim();
+  const context = (payload && payload.context && typeof payload.context === 'object') ? deepClone(payload.context) : null;
+  const participants = [];
+  const seen = Object.create(null);
+  [me.id].concat(toUserIds).forEach(function(id){
+    const k = String(id || "").trim();
+    if (!k || seen[k]) return;
+    seen[k] = true;
+    participants.push(k);
+  });
+  if (participants.length <= 1) return st;
+
+  const now = nowIso();
+  const thread = {
+    id: uid("thr"),
+    subject: subject || (body ? body.split(/\r?\n/)[0].slice(0, 80) : (context && (context.label || context.fieldName)) || "Meddelande"),
+    context: context,
+    participants: participants,
+    createdBy: String(me.id || ""),
+    createdAt: now,
+    updatedAt: now,
+    deletedFor: [],
+    unreadBy: {},
+    messages: [{
+      id: uid("msg"),
+      fromUserId: String(me.id || ""),
+      body: body,
+      createdAt: now
+    }]
+  };
+  participants.forEach(function(uidValue){
+    thread.unreadBy[uidValue] = String(uidValue) !== String(me.id || "");
+  });
+  st.messageThreads.push(thread);
+  return App.commitState(st);
+};
+
+App.Messages.send = function sendMessage(payload) {
+  return App.Messages.createThread(payload);
+};
+
+App.Messages.replyToThread = function replyToThread(threadId, body) {
+  const st = deepClone(_state || defaultState());
+  st.messageThreads = Array.isArray(st.messageThreads) ? st.messageThreads : [];
+  const thread = st.messageThreads.find(function(t){ return t && String(t.id) === String(threadId); });
+  if (!thread) return st;
+
+  const me = App.getActingUser(st) || {};
+  const now = nowIso();
+  thread.messages = Array.isArray(thread.messages) ? thread.messages : [];
+  thread.participants = Array.isArray(thread.participants) ? thread.participants : [];
+  if (thread.participants.indexOf(String(me.id || "")) < 0 && me.id) thread.participants.push(String(me.id));
+
+  thread.messages.push({
+    id: uid("msg"),
+    fromUserId: String(me.id || ""),
+    body: String(body || "").trim(),
+    createdAt: now
+  });
+  thread.updatedAt = now;
+  thread.deletedFor = Array.isArray(thread.deletedFor) ? thread.deletedFor.filter(function(uidValue){
+    return String(uidValue) !== String(me.id || "");
+  }) : [];
+  thread.unreadBy = (thread.unreadBy && typeof thread.unreadBy === "object") ? thread.unreadBy : {};
+  thread.participants.forEach(function(uidValue){
+    thread.unreadBy[String(uidValue)] = String(uidValue) !== String(me.id || "");
+  });
+
+  return App.commitState(st);
+};
+
+App.Messages.markThreadRead = function markThreadRead(threadId, userId) {
+  const st = deepClone(_state || defaultState());
+  st.messageThreads = Array.isArray(st.messageThreads) ? st.messageThreads : [];
+  const thread = st.messageThreads.find(function(t){ return t && String(t.id) === String(threadId); });
+  if (!thread) return st;
+  thread.unreadBy = (thread.unreadBy && typeof thread.unreadBy === "object") ? thread.unreadBy : {};
+  thread.unreadBy[String(userId || "")] = false;
+  return App.commitState(st);
+};
+
+App.Messages.markRead = function markRead(messageOrThreadId) {
+  const st = _state || defaultState();
+  const me = App.getActingUser(st) || {};
+  return App.Messages.markThreadRead(messageOrThreadId, me.id);
+};
+
+App.Messages.deleteThreadForUser = function deleteThreadForUser(threadId, userId) {
+  const st = deepClone(_state || defaultState());
+  st.messageThreads = Array.isArray(st.messageThreads) ? st.messageThreads : [];
+  const thread = st.messageThreads.find(function(t){ return t && String(t.id) === String(threadId); });
+  if (!thread) return st;
+  thread.deletedFor = Array.isArray(thread.deletedFor) ? thread.deletedFor : [];
+  const uidValue = String(userId || "");
+  if (uidValue && thread.deletedFor.indexOf(uidValue) < 0) thread.deletedFor.push(uidValue);
+  return App.commitState(st);
+};
+
 
   App.getCurrentUserId = function getCurrentUserId() {
     try { return String(localStorage.getItem("usp_selected_user_id") || ""); } catch (e) { return ""; }

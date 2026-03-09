@@ -63,6 +63,7 @@
   function notesKeyFor(fieldName){ return String(fieldName) + "__notes_log"; }
   function cornerKeyFor(fieldName){ return String(fieldName) + "__corner"; }
   function initialsKeyFor(fieldName){ return String(fieldName) + "__initials"; }
+  function pdfKeyFor(fieldName){ return String(fieldName) + "__pdf"; }
 
   function readNotesLog(fields, fieldName){
     var k = notesKeyFor(fieldName);
@@ -501,9 +502,148 @@ _applyBtnState(_hasText(nextLog));
       style: field && field.width ? ("width:"+field.width+";min-width:"+field.width+";max-width:"+field.width+";") : "",
       onChange: function(v){ setCell(tabKey, rowForHandlers, fieldName, v); },
 
+      // routine-link right-click for configured columns
+      onRoutineContextmenu: (function(){
+        try{
+          var UI = (window.USP && window.USP.UI) ? window.USP.UI : null;
+          var allowed = !!(UI && typeof UI.isRoutineLinkAllowed === "function" && UI.isRoutineLinkAllowed(tabKey, fieldName));
+          if (!allowed) return null;
+          return function(ev){
+            try{
+              if (ev) { ev.preventDefault(); ev.stopPropagation(); }
+              var stNow = safeGetState();
+              var bindings = (stNow && stNow.settings && stNow.settings.routineBindings) ? stNow.settings.routineBindings : {};
+              var rid = bindings && bindings[tabKey] ? bindings[tabKey][fieldName] : "";
+              if (!rid) {
+                if (UI && typeof UI.openRoutineMissingModal === "function") UI.openRoutineMissingModal();
+                return false;
+              }
+              var routines = (stNow && stNow.data && Array.isArray(stNow.data.routines)) ? stNow.data.routines : [];
+              var rr = routines.find(function(x){ return String(x && x.id) === String(rid); }) || null;
+              if (rr) {
+                if (UI && typeof UI.openRoutinePreviewModal === "function") UI.openRoutinePreviewModal(tabKey, fieldName, rr);
+              } else {
+                if (UI && typeof UI.openRoutineMissingModal === "function") UI.openRoutineMissingModal();
+              }
+              return false;
+            }catch(eRL){ try{ console.error("[RoutineLinks] cell contextmenu failed", eRL); }catch(_){} return false; }
+          };
+        }catch(_){ return null; }
+      })(),
+
       // addons
       cornerValue: fields[cornerKeyFor(fieldName)] || "",
       onCornerChange: (mods2 && mods2.corner) ? function(v){ setMeta(tabKey, rowForHandlers, cornerKeyFor(fieldName), v); } : null,
+
+      pdfHas: !!(fields && fields[pdfKeyFor(fieldName)]),
+      onPdfClick: (mods2 && mods2.pdf) ? function(ev){
+        try{
+          var latestPdfRow = null;
+          try{ latestPdfRow = getRowById(tabKey, rowForHandlers.id, safeGetState()); }catch(_){}
+          var usePdfRow = latestPdfRow || rowForHandlers || {};
+          var pdfVal = (usePdfRow.fields || {})[pdfKeyFor(fieldName)];
+          if (pdfVal && pdfVal.dataUrl) {
+            try {
+              var UI = (window.USP && window.USP.UI) ? window.USP.UI : null;
+              if (UI && typeof UI.openPdfViewerModal === "function") UI.openPdfViewerModal(pdfVal);
+              else window.open(pdfVal.dataUrl, "_blank");
+            } catch(_) {}
+            return;
+          }
+          try {
+            var UI = (window.USP && window.USP.UI) ? window.USP.UI : null;
+            if (UI && typeof UI.openPdfMissingModal === "function") UI.openPdfMissingModal();
+          } catch(_) {}
+        }catch(ePdf){ try{ console.error("[PDF] click failed", ePdf); }catch(_){} }
+      } : null,
+      onPdfUpload: (mods2 && mods2.pdf) ? function(ev){
+        try{
+          window.__uspPdfUploadGuard = window.__uspPdfUploadGuard || { ts: 0, key: "", busy: false };
+          var guardKey = String(tabKey || "") + "|" + String((rowForHandlers && rowForHandlers.id) || "") + "|" + String(fieldName || "");
+          var nowGuard = Date.now();
+          if (window.__uspPdfUploadGuard.busy) {
+            if (ev && ev.preventDefault) ev.preventDefault();
+            return false;
+          }
+          if (window.__uspPdfUploadGuard.key === guardKey && (nowGuard - Number(window.__uspPdfUploadGuard.ts || 0) < 2000)) {
+            if (ev && ev.preventDefault) ev.preventDefault();
+            return false;
+          }
+          window.__uspPdfUploadGuard = { ts: nowGuard, key: guardKey, busy: true };
+
+          var AppNow = _getApp();
+          var stNow = safeGetState();
+          var role = "";
+          try { role = String(AppNow && typeof AppNow.role === "function" ? AppNow.role(stNow) : "").toLowerCase(); } catch(_) {}
+          if (role !== "admin") {
+            window.__uspPdfUploadGuard.busy = false;
+            return false;
+          }
+          ev && ev.preventDefault && ev.preventDefault();
+
+          var latestPdfRow = null;
+          try{ latestPdfRow = getRowById(tabKey, rowForHandlers.id, safeGetState()); }catch(_){}
+          var usePdfRow = latestPdfRow || rowForHandlers || {};
+          var inp = document.createElement("input");
+          inp.type = "file";
+          inp.accept = "application/pdf,.pdf";
+          inp.style.display = "none";
+
+          function releaseGuard(delay){
+            try{
+              setTimeout(function(){
+                try{
+                  if (window.__uspPdfUploadGuard && window.__uspPdfUploadGuard.key === guardKey) {
+                    window.__uspPdfUploadGuard.busy = false;
+                    window.__uspPdfUploadGuard.ts = Date.now();
+                  }
+                }catch(_){}
+              }, delay || 0);
+            }catch(_){}
+          }
+
+          inp.addEventListener("change", function(){
+            try{
+              var file = inp.files && inp.files[0] ? inp.files[0] : null;
+              if (!file) {
+                releaseGuard(600);
+                return;
+              }
+              var reader = new FileReader();
+              reader.onload = function(){
+                try{
+                  setMeta(tabKey, usePdfRow, pdfKeyFor(fieldName), {
+                    name: String(file.name || "document.pdf"),
+                    type: String(file.type || "application/pdf"),
+                    size: Number(file.size || 0),
+                    dataUrl: String(reader.result || ""),
+                    uploadedAt: new Date().toISOString()
+                  });
+                }catch(eUp){ try{ console.error("[PDF] replace failed", eUp); }catch(_){} }
+                try{ inp.remove(); }catch(_){}
+                releaseGuard(1200);
+              };
+              reader.onerror = function(){
+                try{ inp.remove(); }catch(_){}
+                releaseGuard(600);
+              };
+              reader.readAsDataURL(file);
+            }catch(eFile){
+              try{ console.error("[PDF] replace upload failed", eFile); }catch(_){}
+              try{ inp.remove(); }catch(_){}
+              releaseGuard(600);
+            }
+          });
+          document.body.appendChild(inp);
+          inp.click();
+        }catch(ePdf){
+          try{ console.error("[PDF] upload context failed", ePdf); }catch(_){}
+          try{
+            if (window.__uspPdfUploadGuard) window.__uspPdfUploadGuard.busy = false;
+          }catch(_){}
+        }
+        return false;
+      } : null,
 
       notesHas: (function(){ try{ var App=_getApp(); if(App && App.Notes && typeof App.Notes.has==="function") return App.Notes.has(fields, notesFieldName); }catch(e){} return notesHas(fields, notesFieldName); })(),
       onNotesClick: (mods2 && (mods2.notes || mods2.initials || mods2.notesOnInitialsRightClick)) ? function(ev){ onNotesClick(tabKey, rowForHandlers, notesFieldName, ev); } : null,
@@ -885,7 +1025,7 @@ function renderTable(state, tabKey, title){
         // carry any meta keys if present on flat rows
         for (var mk in rowObj){
           if (!rowObj.hasOwnProperty(mk)) continue;
-          if (mk.indexOf("__corner") > 0 || mk.indexOf("__notes") > 0 || mk.indexOf("__initials") > 0) {
+          if (mk.indexOf("__corner") > 0 || mk.indexOf("__notes") > 0 || mk.indexOf("__initials") > 0 || mk.indexOf("__pdf") > 0) {
             rowFields[mk] = rowObj[mk];
           }
         }
@@ -915,7 +1055,43 @@ function renderTable(state, tabKey, title){
         if (!wrapped) wrapped = elFn("span", {}, [String((rowObj.fields || {})[f.name] || "")]);
 
         var st = f.width ? ("width:"+f.width+";max-width:"+f.width+";") : null;
-        tr.appendChild(elFn("td", { style: st }, [wrapped]));
+        var tdAttrs = { style: st };
+        try{
+          var RL = (window.USP && window.USP.UI) ? window.USP.UI : null;
+          var allowRoutine = !!(RL && typeof RL.isRoutineLinkAllowed === "function" && RL.isRoutineLinkAllowed(key, f.name));
+          if (allowRoutine) {
+            tdAttrs.oncontextmenu = function(ev){
+              try{
+                // Let initials / notes / buttons keep their own right-click behavior.
+                var t = ev && ev.target ? ev.target : null;
+                if (t && t.closest && t.closest(".act-initials, [data-usp-initials='1'], [data-usp-initials], .note-icon, button, input, textarea, select")) {
+                  return true;
+                }
+                if (ev) { ev.preventDefault(); ev.stopPropagation(); }
+                var AppNow = _getApp();
+                var stNow = safeGetState();
+                var bindings = (stNow && stNow.settings && stNow.settings.routineBindings) ? stNow.settings.routineBindings : {};
+                var rid = bindings && bindings[key] ? bindings[key][f.name] : "";
+                if (!rid) {
+                  if (RL && typeof RL.openRoutineMissingModal === "function") RL.openRoutineMissingModal();
+                  return false;
+                }
+                var routines = (stNow && stNow.data && Array.isArray(stNow.data.routines)) ? stNow.data.routines : [];
+                var rr = routines.find(function(x){ return String(x && x.id) === String(rid); }) || null;
+                if (rr) {
+                  if (RL && typeof RL.openRoutinePreviewModal === "function") RL.openRoutinePreviewModal(key, f.name, rr);
+                } else {
+                  if (RL && typeof RL.openRoutineMissingModal === "function") RL.openRoutineMissingModal();
+                }
+                return false;
+              }catch(eRL){
+                try{ console.error("[RoutineLinks] td contextmenu failed", eRL); }catch(_){}
+                return false;
+              }
+            };
+          }
+        }catch(eRLSetup){}
+        tr.appendChild(elFn("td", tdAttrs, [wrapped]));
       });
       if (showActions) {
         tr.appendChild(elFn("td", {}, [_renderActionSelect(key, rowObj, elFn)]));

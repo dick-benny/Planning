@@ -213,15 +213,38 @@ USP.UI.dispatchTabAction = function(tabKey, actionId, state){
       const wanted = (spec.newRow.modal.fields || []).slice();
       const title = (spec.newRow.buttonText || "Ny rad").replace(/^\+\s*/,"").trim();
 
-      // Resolve requested field names against schema; if none match, fall back to full form so modal still opens.
+      // Resolve requested field names against FixedTables first, then schema.
+      // This keeps NyRad aligned with current FixedTables definitions (types/mods/order).
       let onlyFields = wanted;
       try{
-        const schema = (USP.App && typeof USP.App.getSchema === "function") ? USP.App.getSchema(tabKey)
-                      : ((App && typeof App.getSchema === "function") ? App.getSchema(tabKey) : null);
-        const fieldsAll = (schema && Array.isArray(schema.fields)) ? schema.fields : [];
-        const matched = wanted.map(n => fieldsAll.find(f => String(f.name||"").trim() === String(n).trim())).filter(Boolean);
-        if (matched.length === 0) onlyFields = null;
+        const t = String(tabKey || "").toLowerCase();
+        let names = [];
+        try{
+          let spec = null;
+          if (App && App.FixedTables) {
+            if (t === "dev" && App.FixedTables.DEV) spec = App.FixedTables.DEV;
+            if (t === "product" && App.FixedTables.PRODUCT) spec = App.FixedTables.PRODUCT;
+            if (t === "project" && App.FixedTables.PROJECT) spec = App.FixedTables.PROJECT;
+          }
+          if (spec && Array.isArray(spec.columns)) {
+            names = spec.columns.map(c => String((c && c.name) || "").trim()).filter(Boolean);
+          }
+        }catch(_){}
+
+        if (!names.length) {
+          const schema = (USP.App && typeof USP.App.getSchema === "function") ? USP.App.getSchema(tabKey)
+                        : ((App && typeof App.getSchema === "function") ? App.getSchema(tabKey) : null);
+          names = (schema && Array.isArray(schema.fields)) ? schema.fields.map(f => String((f && f.name) || "").trim()).filter(Boolean) : [];
+        }
+
+        const matched = wanted.filter(n => names.includes(String(n).trim()));
+        if (matched.length > 0) onlyFields = matched;
       }catch(_){}
+
+      // Keep NyRad limited to the requested visible columns.
+      if (String(tabKey || "").toLowerCase() === "product") onlyFields = ["Produkt","Kategori"];
+      if (String(tabKey || "").toLowerCase() === "project") onlyFields = ["Projektnamn","Kategori"];
+      if (String(tabKey || "").toLowerCase() === "dev") onlyFields = ["Produktidé","Kategori","Syfte"];
 
       const opts = { title, onlyFields };
       if (String(tabKey).toLowerCase() === "todo") opts.todoNew = true;
@@ -441,6 +464,470 @@ actions.appendChild(btnSave);
     document.addEventListener("keydown", onDocKeyDown, true);
   }
 
+
+  // ---------------------------
+  // Routine links (fallback config + admin UI + preview modal)
+  // ---------------------------
+  function getRoutineLinksAllowedMap() {
+    try {
+      if (window.USP && window.USP.App && window.USP.App.RoutineLinks && window.USP.App.RoutineLinks.allowed) {
+        return window.USP.App.RoutineLinks.allowed;
+      }
+    } catch (e) {}
+    // Fallback so feature works even if app_12_routine_links.js is not loaded yet.
+    return {
+      dev: {
+        "Q-test": { enabled: true, label: "Q-test" },
+        "Prissättning": { enabled: true, label: "Prissättning" }
+      },
+      product: {
+        "Shopify-Ready": { enabled: true, label: "Shopify-Ready" },
+        "B2B-ready": { enabled: true, label: "B2B-ready" }
+      },
+      project: {
+        "Projektnamn": { enabled: true, label: "Projektnamn" }
+      }
+    };
+  }
+
+  function isRoutineLinkAllowed(tabKey, fieldName) {
+    try {
+      const t = String(tabKey || "").toLowerCase();
+      const f = String(fieldName || "").trim();
+      const m = getRoutineLinksAllowedMap();
+      return !!(m[t] && m[t][f] && m[t][f].enabled);
+    } catch (e) { return false; }
+  }
+
+  function getRoutineBindings(state) {
+    try {
+      const st = state || (App.getState ? App.getState() : null) || {};
+      const s = st.settings || {};
+      return (s.routineBindings && typeof s.routineBindings === "object") ? s.routineBindings : {};
+    } catch (e) { return {}; }
+  }
+
+  function setRoutineBindings(nextBindings) {
+    try {
+      const st = App.getState ? App.getState() : {};
+      const next = (App.cloneState ? App.cloneState(st) : JSON.parse(JSON.stringify(st || {})));
+      next.settings = next.settings || {};
+      next.settings.routineBindings = nextBindings || {};
+      next.updatedAt = new Date().toISOString();
+      App.commitState(next);
+      return true;
+    } catch (e) {
+      console.error("[RoutineLinks] setRoutineBindings failed", e);
+      return false;
+    }
+  }
+
+  function getRoutineRows(state) {
+    try {
+      const st = state || (App.getState ? App.getState() : null) || {};
+      const rows = st && st.data && Array.isArray(st.data.routines) ? st.data.routines : [];
+      return rows.slice();
+    } catch (e) { return []; }
+  }
+
+  function getRoutineRowLabel(row) {
+    try {
+      const f = (row && row.fields) ? row.fields : {};
+      return String(f.Rutin || f.rutin || f.Name || f.name || f.Titel || row.id || "").trim() || String(row && row.id || "");
+    } catch (e) { return ""; }
+  }
+
+  function getRoutineRowById(rowId, state) {
+    const rows = getRoutineRows(state);
+    return rows.find(r => String(r && r.id) === String(rowId)) || null;
+  }
+
+  function openRoutinePreviewModal(tabKey, fieldName, routineRow) {
+    try {
+      closeAnyModal();
+      const overlay = el("div", { class: "usp-modal-overlay" }, []);
+
+      function getRoutineSpec() {
+        try {
+          if (App && typeof App.getFixedTableSpec === "function") {
+            const s = App.getFixedTableSpec((App.Tabs && App.Tabs.ROUTINES) ? App.Tabs.ROUTINES : "routines");
+            if (s && Array.isArray(s.columns)) return s;
+          }
+        } catch (_) {}
+        try {
+          if (App && App.FixedTables) {
+            if (App.FixedTables.ROUTINES && Array.isArray(App.FixedTables.ROUTINES.columns)) return App.FixedTables.ROUTINES;
+            if (App.FixedTables.routines && Array.isArray(App.FixedTables.routines.columns)) return App.FixedTables.routines;
+          }
+        } catch (_) {}
+        return { columns: [] };
+      }
+
+      const spec = getRoutineSpec();
+      const cols = (spec && Array.isArray(spec.columns) ? spec.columns : []).map(function(c){
+        return {
+          name: String((c && c.name) || "").trim(),
+          type: String((c && c.type) || "text").trim(),
+          registry: (c && c.registry) ? String(c.registry) : null,
+          width: (c && c.width) ? String(c.width) : null,
+          mods: (c && c.mods) ? (function(){ try { return JSON.parse(JSON.stringify(c.mods)); } catch(e){ return Object.assign({}, c.mods); } })() : {}
+        };
+      }).filter(function(c){ return !!c.name; });
+
+      const modal = el("div", {
+        class: "usp-modal routine-preview-modal",
+        style:"width:calc(100vw - 48px) !important;max-width:calc(100vw - 48px) !important;"
+      }, []);
+
+      const title = routineRow
+        ? ("Rutin – " + getRoutineRowLabel(routineRow))
+        : "Rutin";
+      modal.appendChild(el("div", { class:"modal-title" }, [title]));
+
+      // Local styling just for the routine preview so the full row fits without scroll.
+      modal.appendChild(el("style", {}, [`
+        .routine-preview-modal .routine-preview-wrap{margin-top:12px;border:1px solid rgba(17,24,39,.12);border-radius:14px;overflow:hidden;background:#fff;width:100%;max-width:none;}
+        .routine-preview-modal .routine-preview-head,
+        .routine-preview-modal .routine-preview-row{
+          display:grid;
+          grid-template-columns:repeat(6, minmax(0, 1fr));
+          width:100%;
+        }
+        .routine-preview-modal .routine-preview-head{
+          background:#f8fafc;
+          border-bottom:1px solid rgba(17,24,39,.10);
+        }
+        .routine-preview-modal .routine-preview-head > div{
+          padding:9px 10px;
+          font-size:12px;
+          font-weight:800;
+          color:#475569;
+          border-right:1px solid rgba(17,24,39,.08);
+          min-width:0;
+        }
+        .routine-preview-modal .routine-preview-head > div:last-child,
+        .routine-preview-modal .routine-preview-row > div:last-child{
+          border-right:none;
+        }
+        .routine-preview-modal .routine-preview-row > div{
+          padding:8px;
+          border-right:1px solid rgba(17,24,39,.08);
+          min-width:0;
+        }
+        .routine-preview-modal .routine-preview-row .act-field{
+          width:100%;
+          min-width:0 !important;
+        }
+        .routine-preview-modal .routine-preview-row .act-cell{
+          min-width:0 !important;
+        }
+        .routine-preview-modal .routine-preview-row .act-value-input{
+          width:100% !important;
+          min-width:0 !important;
+          font-size:13px !important;
+          padding:6px 10px !important;
+        }
+        .routine-preview-modal .routine-preview-row .act-date-display,
+        .routine-preview-modal .routine-preview-row .week-display,
+        .routine-preview-modal .routine-preview-row .quarter-display{
+          min-width:0 !important;
+          font-size:13px !important;
+        }
+        .routine-preview-modal .routine-preview-row .pdf-icon{
+          width:34px !important;
+          height:22px !important;
+          font-size:10px !important;
+          padding:0 6px !important;
+          flex:0 0 auto;
+        }
+      `]));
+
+      if (routineRow) {
+        const fieldsBag = (routineRow && routineRow.fields) ? routineRow.fields : {};
+        const fieldTypes = (window.USP && window.USP.App && window.USP.App.FieldTypes) ? window.USP.App.FieldTypes : null;
+
+        const tableWrap = el("div", { class:"routine-preview-wrap" }, []);
+
+        const header = el("div", { class:"routine-preview-head" }, []);
+        cols.forEach(function(c){
+          header.appendChild(el("div", {}, [c.name]));
+        });
+        tableWrap.appendChild(header);
+
+        const rowGrid = el("div", { class:"routine-preview-row" }, []);
+
+        function pdfKeyFor(name){ return String(name) + "__pdf"; }
+
+        cols.forEach(function(c){
+          const value = (fieldsBag && fieldsBag[c.name] != null) ? fieldsBag[c.name] : "";
+          let cellInner = null;
+
+          try {
+            if (fieldTypes && typeof fieldTypes.renderEditor === "function") {
+              const ctx = {
+                type: c.type || "text",
+                baseType: c.type || "text",
+                registry: c.registry || null,
+                mods: c.mods || {},
+                value: value,
+                disabled: true,
+                style: "width:100%;min-width:0;",
+                onChange: function(){},
+                pdfHas: !!(fieldsBag && fieldsBag[pdfKeyFor(c.name)]),
+                onPdfClick: (c.mods && c.mods.pdf) ? function(ev){
+                  try{
+                    const pdfVal = (fieldsBag || {})[pdfKeyFor(c.name)];
+                    const UI = (window.USP && window.USP.UI) ? window.USP.UI : null;
+                    if (pdfVal && pdfVal.dataUrl) {
+                      if (UI && typeof UI.openPdfViewerModal === "function") UI.openPdfViewerModal(pdfVal);
+                    } else {
+                      if (UI && typeof UI.openPdfMissingModal === "function") UI.openPdfMissingModal();
+                    }
+                  }catch(_){}
+                } : null,
+                onPdfUpload: null,
+                notesHas: false,
+                onNotesClick: null,
+                initialsValue: "",
+                initialsNotesHas: false,
+                onInitialsClick: null,
+                onCornerChange: null,
+                onRoutineContextmenu: null
+              };
+              cellInner = fieldTypes.renderEditor(ctx);
+            }
+          } catch (_) {
+            cellInner = null;
+          }
+
+          if (!cellInner) {
+            cellInner = el("div", {
+              style:"padding:6px 10px;min-height:40px;display:flex;align-items:center;min-width:0;"
+            }, [String(value == null ? "" : value)]);
+          }
+
+          rowGrid.appendChild(el("div", {}, [cellInner]));
+        });
+
+        tableWrap.appendChild(rowGrid);
+        modal.appendChild(tableWrap);
+      } else {
+        modal.appendChild(el("div", { class:"hint", style:"margin-top:10px;" }, ["Ingen rutin är kopplad"]));
+      }
+
+      const actions = el("div", { class:"modal-actions" }, []);
+      const btnClose = el("button", { class:"btn", type:"button" }, ["Stäng"]);
+      btnClose.addEventListener("click", function(){ overlay.remove(); });
+      actions.appendChild(btnClose);
+      modal.appendChild(actions);
+      overlay.appendChild(modal);
+      overlay.addEventListener("click", function(ev){ if (ev && ev.target === overlay) overlay.remove(); });
+      document.body.appendChild(overlay);
+      return true;
+    } catch (e) {
+      console.error("[RoutineLinks] openRoutinePreviewModal failed", e);
+      return false;
+    }
+  }
+
+  function openRoutineMissingModal() {
+    try {
+      closeAnyModal();
+      const overlay = el("div", { class: "usp-modal-overlay" }, []);
+      const modal = el("div", { class: "usp-modal", style:"max-width:420px;" }, []);
+      modal.appendChild(el("div", { class:"modal-title" }, ["Kopplad rutin"]));
+      modal.appendChild(el("div", { class:"hint", style:"margin-top:10px;" }, ["Ingen rutin är kopplad"]));
+      const actions = el("div", { class:"modal-actions" }, []);
+      const btnClose = el("button", { class:"btn", type:"button" }, ["Stäng"]);
+      btnClose.addEventListener("click", function(){ overlay.remove(); });
+      actions.appendChild(btnClose);
+      modal.appendChild(actions);
+      overlay.appendChild(modal);
+      overlay.addEventListener("click", function(ev){ if (ev && ev.target === overlay) overlay.remove(); });
+      document.body.appendChild(overlay);
+      return true;
+    } catch (e) {
+      console.error("[RoutineLinks] openRoutineMissingModal failed", e);
+      return false;
+    }
+  }
+
+  function openPdfMissingModal() {
+    try {
+      closeAnyModal();
+      const overlay = el("div", { class: "usp-modal-overlay" }, []);
+      const modal = el("div", { class: "usp-modal", style:"max-width:420px;" }, []);
+      modal.appendChild(el("div", { class:"modal-title" }, ["PDF"]));
+      modal.appendChild(el("div", { class:"hint", style:"margin-top:10px;" }, ["Ingen PDF finns"]));
+      const actions = el("div", { class:"modal-actions" }, []);
+      const btnClose = el("button", { class:"btn", type:"button" }, ["Stäng"]);
+      btnClose.addEventListener("click", function(){ overlay.remove(); });
+      actions.appendChild(btnClose);
+      modal.appendChild(actions);
+      overlay.appendChild(modal);
+      overlay.addEventListener("click", function(ev){ if (ev && ev.target === overlay) overlay.remove(); });
+      document.body.appendChild(overlay);
+      return true;
+    } catch (e) {
+      console.error("[PDF] openPdfMissingModal failed", e);
+      return false;
+    }
+  }
+
+  function openPdfViewerModal(pdfVal) {
+    try {
+      closeAnyModal();
+      const info = pdfVal || {};
+      const name = String(info.name || "document.pdf");
+      const dataUrl = String(info.dataUrl || "");
+      if (!dataUrl) return openPdfMissingModal();
+
+      const overlay = el("div", { class: "usp-modal-overlay" }, []);
+      const modal = el("div", { class: "usp-modal", style:"max-width:1400px;width:min(1400px,96vw);height:min(92vh,980px);display:flex;flex-direction:column;" }, []);
+      modal.appendChild(el("div", { class:"modal-title" }, [name]));
+
+      const frameWrap = el("div", {
+        style:"flex:1;min-height:0;margin-top:10px;border:1px solid rgba(17,24,39,.12);border-radius:14px;overflow:hidden;background:#fff;"
+      }, []);
+      const iframe = el("iframe", {
+        src: dataUrl,
+        title: name,
+        style:"width:100%;height:100%;min-height:70vh;border:0;background:#fff;"
+      }, []);
+      frameWrap.appendChild(iframe);
+      modal.appendChild(frameWrap);
+
+      const actions = el("div", { class:"modal-actions" }, []);
+      const btnOpen = el("button", { class:"btn btn-secondary", type:"button" }, ["Öppna i ny flik"]);
+      const btnClose = el("button", { class:"btn", type:"button" }, ["Stäng"]);
+      btnOpen.addEventListener("click", function(){
+        try { window.open(dataUrl, "_blank"); } catch(_) {}
+      });
+      btnClose.addEventListener("click", function(){ overlay.remove(); });
+      actions.appendChild(btnOpen);
+      actions.appendChild(btnClose);
+      modal.appendChild(actions);
+
+      overlay.appendChild(modal);
+      overlay.addEventListener("click", function(ev){ if (ev && ev.target === overlay) overlay.remove(); });
+      document.body.appendChild(overlay);
+      return true;
+    } catch (e) {
+      console.error("[PDF] openPdfViewerModal failed", e);
+      return false;
+    }
+  }
+
+  function openColumnRoutineBindingsModal() {
+    try {
+      closeSettingsPopover();
+      const st = App.getState ? App.getState() : {};
+      const allowed = getRoutineLinksAllowedMap();
+      const bindings = JSON.parse(JSON.stringify(getRoutineBindings(st) || {}));
+      const routineRows = getRoutineRows(st);
+      const routineOptions = [{ value:"", label:"-- Ingen koppling --" }]
+        .concat(routineRows.map(r => ({ value: String(r.id), label: getRoutineRowLabel(r) })));
+
+      const overlay = el("div", { class:"usp-modal-overlay" }, []);
+      const modal = el("div", { class:"usp-modal", style:"max-width:820px;" }, []);
+      modal.appendChild(el("div", { class:"modal-title" }, ["Koppla kolumn-rutin"]));
+      modal.appendChild(el("div", { class:"hint", style:"margin-bottom:12px;" }, [
+        "Välj vilken rutin som ska öppnas vid högerklick i vald kolumn."
+      ]));
+
+      const wrap = el("div", { style:"display:flex;flex-direction:column;gap:16px;max-height:60vh;overflow:auto;" }, []);
+
+      ["dev","product","project"].forEach(function(tabKey){
+        const cols = allowed && allowed[tabKey] ? Object.keys(allowed[tabKey]) : [];
+        if (!cols.length) return;
+
+        const card = el("div", {
+          style:"border:1px solid rgba(17,24,39,.12);border-radius:14px;padding:12px;background:#fff;"
+        }, []);
+        const tabLabel = tabKey === "dev" ? "DEV" : (tabKey === "product" ? "PRODUCT" : "PROJECT");
+        card.appendChild(el("div", { class:"label", style:"margin-bottom:10px;" }, [tabLabel]));
+
+        cols.forEach(function(fieldName){
+          bindings[tabKey] = bindings[tabKey] || {};
+          const row = el("div", {
+            style:"display:grid;grid-template-columns:170px 1fr auto;gap:10px;align-items:center;margin-bottom:10px;"
+          }, []);
+          row.appendChild(el("div", { class:"hint", style:"font-weight:700;" }, [fieldName]));
+
+          const sel = el("select", { class:"input full" }, []);
+          routineOptions.forEach(function(opt){
+            const option = el("option", { value: opt.value }, [opt.label]);
+            if (String(bindings[tabKey][fieldName] || "") === String(opt.value || "")) option.selected = true;
+            sel.appendChild(option);
+          });
+          sel.addEventListener("change", function(){
+            const v = String(sel.value || "");
+            if (v) bindings[tabKey][fieldName] = v;
+            else delete bindings[tabKey][fieldName];
+          });
+          row.appendChild(sel);
+
+          const btnTest = el("button", { class:"btn btn-secondary", type:"button" }, ["Testa"]);
+          btnTest.addEventListener("click", function(){
+            const rid = String(bindings[tabKey][fieldName] || sel.value || "");
+            const rr = rid ? getRoutineRowById(rid, App.getState ? App.getState() : st) : null;
+            if (rr) openRoutinePreviewModal(tabKey, fieldName, rr);
+            else openRoutineMissingModal();
+          });
+          row.appendChild(btnTest);
+
+          card.appendChild(row);
+        });
+
+        wrap.appendChild(card);
+      });
+
+      if (!routineRows.length) {
+        wrap.appendChild(el("div", {
+          style:"border:1px dashed rgba(17,24,39,.18);border-radius:12px;padding:12px;"
+        }, [
+          el("div", { class:"hint" }, ["Inga rutiner finns ännu. Skapa rutiner först och koppla sedan."])
+        ]));
+      }
+
+      modal.appendChild(wrap);
+
+      const actions = el("div", { class:"modal-actions" }, []);
+      const btnCancel = el("button", { class:"btn", type:"button" }, ["Cancel"]);
+      const btnSave = el("button", { class:"btn btn-primary", type:"button" }, ["Save"]);
+      btnCancel.addEventListener("click", function(){ overlay.remove(); });
+      btnSave.addEventListener("click", function(){
+        try {
+          setRoutineBindings(bindings);
+          overlay.remove();
+        } catch (e) {
+          console.error("[RoutineLinks] save bindings failed", e);
+          try { alert("Kunde inte spara kopplingar"); } catch(_) {}
+        }
+      });
+      actions.appendChild(btnCancel);
+      actions.appendChild(btnSave);
+      modal.appendChild(actions);
+
+      overlay.appendChild(modal);
+      overlay.addEventListener("click", function(ev){ if (ev && ev.target === overlay) overlay.remove(); });
+      document.body.appendChild(overlay);
+      return true;
+    } catch (e) {
+      console.error("[RoutineLinks] open bindings modal failed", e);
+      return false;
+    }
+  }
+
+  window.USP = window.USP || {};
+  window.USP.UI = window.USP.UI || {};
+  window.USP.UI.isRoutineLinkAllowed = isRoutineLinkAllowed;
+  window.USP.UI.openRoutinePreviewModal = openRoutinePreviewModal;
+  window.USP.UI.openRoutineMissingModal = openRoutineMissingModal;
+  window.USP.UI.openPdfMissingModal = openPdfMissingModal;
+  window.USP.UI.openPdfViewerModal = openPdfViewerModal;
+  window.USP.UI.openColumnRoutineBindingsModal = openColumnRoutineBindingsModal;
+
   function renderSettingsPopover(state) {
     const old = document.getElementById("usp-settings-popover");
     if (old && old.parentNode) old.parentNode.removeChild(old);
@@ -476,6 +963,17 @@ actions.appendChild(btnSave);
     try{ alert("Manage users failed: " + (e && e.message ? e.message : e)); }catch(_){ }
   }
 } }, ["Manage users"]));
+      row.appendChild(el("button", { class:"btn btn-secondary", type:"button", onclick: () => {
+  try{
+    closeSettingsPopover();
+    var fn = (window.USP && window.USP.UI && typeof window.USP.UI.openColumnRoutineBindingsModal === "function") ? window.USP.UI.openColumnRoutineBindingsModal : null;
+    if (!fn) { console.error("[ui] openColumnRoutineBindingsModal not available"); return; }
+    fn();
+  }catch(e){
+    console.error("[ui] Koppla kolumn-rutin click failed", e);
+    try{ alert("Koppla kolumn-rutin failed: " + (e && e.message ? e.message : e)); }catch(_){ }
+  }
+} }, ["Koppla kolumn-rutin"]));
     }
     row.appendChild(el("button", { class:"btn btn-secondary", type:"button", onclick: () => { closeSettingsPopover(); if (App.toggleUser) App.toggleUser(); } }, ["Change user (Dick ↔ Benny)"]));
     pop.appendChild(row);
@@ -521,7 +1019,7 @@ actions.appendChild(btnSave);
 let _fixingRoutinesSchema = false;
 
 function fixedRoutinesSchema() {
-  const cols = ["Rutin", "Steg1", "Steg2", "Steg3", "Steg4", "Steg5"];
+  const cols = Object.keys(fields || {});
   return {
     version: 1,
     fields: cols.map((name, i) => ({
@@ -529,7 +1027,7 @@ function fixedRoutinesSchema() {
       order: i,
       name,
       type: "text",
-      mods: { notes: true }
+      mods: { pdf: true }
     }))
   };
 }
@@ -1120,7 +1618,6 @@ let fieldsAll = sortFields(schema.fields || []);
   } catch(eFT) { _logDefaults("[NyRad] FixedTables override failed", eFT); }
 const todoNew = !!(opts && opts.todoNew) && (App.Tabs && tabKey === App.Tabs.TODO);
 let onlyFields = (opts && Array.isArray(opts.onlyFields)) ? opts.onlyFields.map(x => String(x)) : null;
-// DEV: always show all DEV columns in NyRad modal (ignore any onlyFields passed from callers)
 
 const fields = onlyFields
   ? onlyFields.map(n => fieldsAll.find(f => String(f.name||"").trim() === String(n).trim())).filter(Boolean)
@@ -1562,7 +2059,7 @@ function _setInvalidBorder(elm, invalid){
       value: tmp[name],
       state: st,
       row: { id:"__new__", fields: tmp },
-      onChange: function(v){ tmp[name] = v; updateNewRowSaveState(); },
+      onChange: function(v){ tmp[name] = v; },
       onNotesClick: (todoNew && (name === "Kategori" || name === "Klart")) ? null : function(){},
       hasNotes: (todoNew && (name === "Kategori" || name === "Klart")) ? null : function(){ return false; }
     };
@@ -1689,7 +2186,7 @@ if (todoNew && name === "Beskrivning") {
 
     if (!editor) {
       // fallback text
-      editor = el("input", { class:"input", value: String(tmp[name]||""), oninput: (ev)=>{ tmp[name]=String(ev.target.value||""); updateNewRowSaveState(); } }, []);
+      editor = el("input", { class:"input", value: String(tmp[name]||""), oninput: (ev)=>{ tmp[name]=String(ev.target.value||""); } }, []);
     }
 
     // Adjust field widths in Ny ToDo to match table proportions
@@ -1711,30 +2208,9 @@ if (todoNew && name === "Beskrivning") {
 
   const btnRow = el("div", { style:"display:flex;justify-content:flex-end;gap:10px;margin-top:18px;" }, []);
   const btnCancel = el("button", { class: btnClass("secondary"), type:"button", onclick: () => { closeAnyModal(); } }, ["Cancel"]);
-  function updateNewRowSaveState() {
-    try {
-      // DEV NyRad: require Produktidé + Kategori + Syfte
-      if (String(tabKey || "").toLowerCase() === "dev") {
-        const okProduktide = String(tmp["Produktidé"] || "").trim().length > 0;
-        const okKategori = String(tmp["Kategori"] || "").trim().length > 0;
-        const okSyfte = String(tmp["Syfte"] || "").trim().length > 0;
-        if (btnSave) btnSave.disabled = !(okProduktide && okKategori && okSyfte);
-        return;
-      }
-
-      // Existing TODO NyRad rule
-      if (todoNew) {
-        if (btnSave) btnSave.disabled = (String(tmp["Beskrivning"] || "").trim().length === 0);
-        return;
-      }
-
-      if (btnSave) btnSave.disabled = false;
-    } catch(e) {}
-  }
-
   const btnSave = el("button", { class: btnClass("primary"), type:"button", disabled: null ? "disabled" : null, onclick: () => {
     const ts = new Date().toISOString();
-    updateNewRowSaveState();
+    if (todoNew) { try{ btnSave.disabled = (String(tmp["Beskrivning"]||"").trim().length===0); }catch(e){} }
     // DEV: apply admin-defined DEFAULT/DEV values right before saving the new row
     if (tabKey === App.Tabs.DEV) {
       try {
@@ -1813,15 +2289,14 @@ if (todoNew && name === "Beskrivning") {
         };
 
 
-        // Ensure hidden DEV columns are present in tmp before applying defaults on save.
-        // This keeps DEFAULT/DEV values for columns that are intentionally not shown in the NyRad modal.
+        // Ensure hidden DEV columns are present before applying defaults.
+        // NyRad shows only a subset, but DEFAULT/DEV values must still be saved on the new row.
         try {
           (fieldsAll || []).forEach((f) => {
             const k = String((f && f.name) || "").trim();
             if (!k) return;
             if (!(k in tmp)) tmp[k] = "";
           });
-          _logDefaults("[NyRad/DEV] ensured hidden keys before apply", {nKeys: Object.keys(tmp||{}).length, keys: Object.keys(tmp||{})});
         } catch(eHidden) {}
 
         // apply for any empty field that has a stored default
@@ -1913,15 +2388,14 @@ if (todoNew && name === "Beskrivning") {
           return [];
         };
 
-        // Ensure hidden PRODUCT columns are present in tmp before applying defaults on save.
-        // This keeps DEFAULT/PRODUCT values for columns that are intentionally not shown in the NyRad modal.
+        // Ensure hidden PRODUCT columns are present before applying defaults.
+        // NyRad shows only Produkt + Kategori, but DEFAULT/PRODUCT values must still be saved.
         try {
           (fieldsAll || []).forEach((f) => {
             const k = String((f && f.name) || "").trim();
             if (!k) return;
             if (!(k in tmp)) tmp[k] = "";
           });
-          _logDefaults("[NyRad/PRODUCT] ensured hidden keys before apply", {nKeys: Object.keys(tmp||{}).length, keys: Object.keys(tmp||{})});
         } catch(eHidden) {}
 
         Object.keys(tmp || {}).forEach((k) => {
@@ -1941,7 +2415,7 @@ if (todoNew && name === "Beskrivning") {
       } catch (e) {}
     }
 
-    // PROJECT: apply admin-defined DEFAULT/PROJECT values + Notes right before saving the new row
+    // PROJECT: apply admin-defined DEFAULT/PROJECT values right before saving the new row
     if (tabKey === App.Tabs.PROJECT) {
       try {
         _logDefaults("[NyRad/PROJECT] before apply", {tabKey: tabKey, nKeys: Object.keys(tmp||{}).length, keys: Object.keys(tmp||{}), snapshot: Object.fromEntries(Object.keys(tmp||{}).slice(0,15).map(k=>[k,tmp[k]]))});
@@ -1964,17 +2438,6 @@ if (todoNew && name === "Beskrivning") {
             const v = localStorage.getItem("USP_DEFAULTS_PROJECT__" + norm);
             if (v != null && String(v).trim()) return v;
           } catch(e1) {}
-          try {
-            for (let i=0;i<localStorage.length;i++){
-              const k = localStorage.key(i);
-              if (!k || !k.startsWith("USP_DEFAULTS_PROJECT__")) continue;
-              const tail = k.substring("USP_DEFAULTS_PROJECT__".length);
-              if (normKey(tail) === norm) {
-                const v = localStorage.getItem(k);
-                if (v != null && String(v).trim()) return v;
-              }
-            }
-          } catch(e2) {}
           return "";
         };
 
@@ -1994,141 +2457,43 @@ if (todoNew && name === "Beskrivning") {
               if (Array.isArray(a) && a.length) return a;
             }
           } catch(e1) {}
-          try {
-            for (let i=0;i<localStorage.length;i++){
-              const k = localStorage.key(i);
-              if (!k || !k.startsWith("USP_DEFAULTS_PROJECT__NOTES__")) continue;
-              const tail = k.substring("USP_DEFAULTS_PROJECT__NOTES__".length);
-              if (normKey(tail) === norm) {
-                const s = localStorage.getItem(k);
-                if (s && String(s).trim()) {
-                  const a = JSON.parse(s);
-                  if (Array.isArray(a) && a.length) return a;
-                }
-              }
-            }
-          } catch(e2) {}
           return [];
         };
 
-        // Ensure hidden PROJECT columns are present in tmp before applying defaults on save.
-        // This keeps DEFAULT/PROJECT values for columns that are intentionally not shown in the NyRad modal.
+        // Ensure hidden PROJECT columns are present before applying defaults.
+        // NyRad shows only Projektnamn + Kategori, but DEFAULT/PROJECT values must still be saved.
         try {
           (fieldsAll || []).forEach((f) => {
             const k = String((f && f.name) || "").trim();
             if (!k) return;
             if (!(k in tmp)) tmp[k] = "";
           });
-          _logDefaults("[NyRad/PROJECT] ensured hidden keys before apply", {nKeys: Object.keys(tmp||{}).length, keys: Object.keys(tmp||{})});
         } catch(eHidden) {}
 
         Object.keys(tmp || {}).forEach((k) => {
           if (tmp[k] != null && String(tmp[k]).trim()) return;
-
           const dv = readDefault(normKey(k));
           if (dv != null && String(dv).trim()) { tmp[k] = dv; _logDefaults("[NyRad/PROJECT] applied default", {field: k, norm: normKey(k), val: dv}); }
-
-          try {
-            const hasN = ((readNotesLog(tmp, k) || []).length > 0);
-            if (!hasN) {
-              const nlog = readDefaultNotes(normKey(k));
-              if (Array.isArray(nlog) && nlog.length) { writeNotesLog(tmp, k, nlog); _logDefaults("[NyRad/PROJECT] applied default notes", {field: k, n: nlog.length}); }
-            }
-          } catch(eN) {}
         });
+
+        // Notes defaults only for columns that allow notes
+        try {
+          const spec = (App && App.FixedTables) ? App.FixedTables.PROJECT : null;
+          const cols = (spec && Array.isArray(spec.columns)) ? spec.columns : [];
+          const allow = {};
+          cols.forEach(c => { if (c && c.name) allow[normKey(c.name)] = !!(c.mods && (c.mods.notes || c.mods.Notes)); });
+          Object.keys(tmp || {}).forEach((k) => {
+            const nk = normKey(k);
+            if (!allow[nk]) return;
+            const hasN = ((readNotesLog(tmp, k) || []).length > 0);
+            if (hasN) return;
+            const nlog = readDefaultNotes(nk);
+            if (Array.isArray(nlog) && nlog.length) { writeNotesLog(tmp, k, nlog); _logDefaults("[NyRad/PROJECT] applied default notes", {field: k, n: nlog.length}); }
+          });
+        } catch(eN) {}
       } catch (e) {}
     }
 
-    // Final safety pass for PROJECT only: merge DEFAULT/PROJECT values for hidden columns
-    // right before the new row is created.
-    try {
-      const tNorm = String(tabKey || "").toLowerCase();
-      if (tNorm === "project") {
-        const normKey = (s) => String(s || "")
-          .toLowerCase()
-          .replace(/[åä]/g, "a")
-          .replace(/ö/g, "o")
-          .replace(/[^a-z0-9]+/g, "-")
-          .replace(/^-+|-+$/g, "");
-
-        const UI = (window.USP && window.USP.UI) ? window.USP.UI : null;
-        const mem = UI && UI._defaultsDraftProject ? UI._defaultsDraftProject : null;
-        const saved = mem && mem.saved ? mem.saved : null;
-        const savedNotes = mem && mem.savedNotes ? mem.savedNotes : null;
-
-        function readDefault(norm){
-          try{
-            if (saved && saved[norm] != null && String(saved[norm]).trim()) return String(saved[norm]);
-          }catch(_){}
-          try{
-            const v = localStorage.getItem("USP_DEFAULTS_PROJECT__" + norm);
-            if (v != null && String(v).trim()) return v;
-          }catch(_){}
-          try{
-            for (let i=0;i<localStorage.length;i++){
-              const k = localStorage.key(i);
-              if (!k || !k.startsWith("USP_DEFAULTS_PROJECT__")) continue;
-              if (k.startsWith("USP_DEFAULTS_PROJECT__NOTES__")) continue;
-              const tail = k.substring("USP_DEFAULTS_PROJECT__".length);
-              if (normKey(tail) === norm) {
-                const v = localStorage.getItem(k);
-                if (v != null && String(v).trim()) return v;
-              }
-            }
-          }catch(_){}
-          return "";
-        }
-
-        function readDefaultNotes(norm){
-          try{
-            const kNotes = String(norm) + "__notes";
-            const v = savedNotes && savedNotes[kNotes] != null ? savedNotes[kNotes] : null;
-            if (Array.isArray(v) && v.length) return v;
-          }catch(_){}
-          try{
-            const s = localStorage.getItem("USP_DEFAULTS_PROJECT__NOTES__" + norm);
-            if (s && String(s).trim()) {
-              const a = JSON.parse(s);
-              if (Array.isArray(a) && a.length) return a;
-            }
-          }catch(_){}
-          try{
-            for (let i=0;i<localStorage.length;i++){
-              const k = localStorage.key(i);
-              if (!k || !k.startsWith("USP_DEFAULTS_PROJECT__NOTES__")) continue;
-              const tail = k.substring("USP_DEFAULTS_PROJECT__NOTES__".length);
-              if (normKey(tail) === norm) {
-                const s = localStorage.getItem(k);
-                if (s && String(s).trim()) {
-                  const a = JSON.parse(s);
-                  if (Array.isArray(a) && a.length) return a;
-                }
-              }
-            }
-          }catch(_){}
-          return [];
-        }
-
-        try{
-          (fieldsAll || []).forEach((f) => {
-            const name = String((f && f.name) || "").trim();
-            if (!name) return;
-            if (!(name in tmp)) tmp[name] = "";
-            if (tmp[name] == null || !String(tmp[name]).trim()) {
-              const dv = readDefault(normKey(name));
-              if (dv != null && String(dv).trim()) tmp[name] = dv;
-            }
-            try{
-              const hasN = ((readNotesLog(tmp, name) || []).length > 0);
-              if (!hasN) {
-                const nlog = readDefaultNotes(normKey(name));
-                if (Array.isArray(nlog) && nlog.length) writeNotesLog(tmp, name, nlog);
-              }
-            }catch(_){}
-          });
-        }catch(_){}
-      }
-    } catch(eFinal) {}
 
     const row = {
       id: "row_" + Date.now() + "_" + Math.random().toString(16).slice(2),
@@ -2150,7 +2515,6 @@ if (todoNew && name === "Beskrivning") {
 
   btnRow.appendChild(btnCancel);
   btnRow.appendChild(btnSave);
-  updateNewRowSaveState();
 
   modal.appendChild(form);
   modal.appendChild(btnRow);
@@ -2668,19 +3032,25 @@ function adminSchemaView(state, tabKey, title, opts) {
   const overlay = el("div", {
     class: "usp-modal-overlay",
     onclick: (e) => { if (e && e.target === overlay) overlay.remove(); },
-    style: "position:fixed;inset:0;background:rgba(0,0,0,.35);z-index:9999;display:flex;align-items:flex-start;justify-content:center;padding:28px;overflow:auto;"
+    style: "position:fixed;inset:0;background:rgba(0,0,0,.35);z-index:9999;display:flex;align-items:flex-start;justify-content:center;padding:20px;overflow:auto;"
   }, []);
 
-  const modal = el("div", { class:"usp-modal", style:"max-width:980px;width:100%;background:#fff;border-radius:10px;box-shadow:0 10px 30px rgba(0,0,0,.25);" }, [
+  const modal = el("div", {
+    class:"usp-modal",
+    style:"width:calc(100vw - 48px) !important;max-width:calc(100vw - 48px) !important;background:#fff;border-radius:10px;box-shadow:0 10px 30px rgba(0,0,0,.25);"
+  }, [
     el("div", { class:"modal-head", style:"display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 16px;border-bottom:1px solid #ddd;" }, [
       el("div", { class:"title", style:"font-weight:700;" }, [String(title || "") + " – Arkiv"]),
       el("button", { class:"btn btn-secondary", type:"button", onclick: () => overlay.remove() }, ["Stäng"]),
     ]),
-    el("div", { class:"modal-body", style:"padding:14px 16px;" }, [
+    el("div", { class:"modal-body", style:"padding:14px 16px;max-height:70vh;overflow:auto;" }, [
       rows.length ? (function(){
-        const table = el("table", { class:"table" }, []);
+        const table = el("table", { class:"table", style:"width:100%;table-layout:auto;" }, []);
         table.appendChild(el("thead", {}, [
-          el("tr", {}, fieldNames.map(n => el("th", {}, [n])))
+          el("tr", {}, [
+            ...fieldNames.map(n => el("th", { style:"white-space:nowrap;" }, [n])),
+            el("th", { style:"width:64px;text-align:center;white-space:nowrap;" }, [""])
+          ])
         ]));
         const tbody = el("tbody", {}, []);
         rows.forEach(r => {
@@ -2689,6 +3059,30 @@ function adminSchemaView(state, tabKey, title, opts) {
             const v = (r && r.fields) ? r.fields[n] : "";
             tr.appendChild(el("td", {}, [ (v == null) ? "" : String(v) ]));
           });
+
+          const delBtn = el("button", {
+            class:"btn btn-secondary",
+            type:"button",
+            title:"Ta bort permanent",
+            style:"padding:6px 10px;min-width:42px;",
+            onclick: (ev) => {
+              const rowNode = (ev && ev.target && typeof ev.target.closest === "function") ? ev.target.closest("tr") : null;
+              openInlineConfirm({
+                anchor: ev.currentTarget || ev.target,
+                rowNode: rowNode,
+                message: "Ta bort raden permanent från Arkiv?",
+                onConfirm: function(){
+                  try {
+                    if (App && typeof App.deleteRow === "function") App.deleteRow(tabKey, r.id);
+                  } catch(e) { console.error(e); }
+                  try { overlay.remove(); } catch(_) {}
+                  try { openArchiveModal(App.getState(), tabKey, title); } catch(_) {}
+                }
+              });
+            }
+          }, ["🗑"]);
+
+          tr.appendChild(el("td", { style:"text-align:center;white-space:nowrap;" }, [delBtn]));
           tbody.appendChild(tr);
         });
         table.appendChild(tbody);
@@ -2701,7 +3095,94 @@ function adminSchemaView(state, tabKey, title, opts) {
   document.body.appendChild(overlay);
 }
 
-  function doneLabel() { return "Done"; }
+  
+function doneLabel() { return "Done"; }
+
+function clearInlineConfirm() {
+  try {
+    document.querySelectorAll(".usp-inline-confirm").forEach(function(node){ node.remove(); });
+  } catch(e) {}
+  try {
+    document.querySelectorAll(".is-pending-delete").forEach(function(node){ node.classList.remove("is-pending-delete"); });
+  } catch(e) {}
+}
+
+function openInlineConfirm(opts){
+  opts = opts || {};
+  clearInlineConfirm();
+
+  const anchorNode = opts.anchor || null;
+  const rowNode = opts.rowNode || null;
+  const message = String(opts.message || "Är du säker?");
+  const onConfirm = (typeof opts.onConfirm === "function") ? opts.onConfirm : function(){};
+  const onCancel = (typeof opts.onCancel === "function") ? opts.onCancel : function(){};
+
+  if (rowNode && rowNode.classList) rowNode.classList.add("is-pending-delete");
+
+  const box = el("div", { class:"usp-inline-confirm" }, [
+    el("div", { class:"usp-inline-confirm__text" }, [message]),
+    el("div", { class:"usp-inline-confirm__actions" }, [
+      el("button", { class:"btn btn-danger", type:"button" }, ["Ja"]),
+      el("button", { class:"btn btn-secondary", type:"button" }, ["Avbryt"])
+    ])
+  ]);
+
+  const btnYes = box.querySelector(".btn-danger");
+  const btnNo = box.querySelector(".btn-secondary");
+
+  function cleanup(){
+    try { box.remove(); } catch(_) {}
+    try { if (rowNode && rowNode.classList) rowNode.classList.remove("is-pending-delete"); } catch(_) {}
+    try { document.removeEventListener("mousedown", onDocDown, true); } catch(_) {}
+    try { window.removeEventListener("resize", positionBox, true); } catch(_) {}
+    try { window.removeEventListener("scroll", positionBox, true); } catch(_) {}
+  }
+
+  function positionBox(){
+    if (!box.isConnected) return;
+    const rect = (anchorNode && anchorNode.getBoundingClientRect) ? anchorNode.getBoundingClientRect() : null;
+    if (!rect) {
+      box.style.top = "24px";
+      box.style.left = "24px";
+      return;
+    }
+    const top = Math.max(8, rect.bottom + 8 + window.scrollY);
+    const left = Math.max(8, rect.right - 220 + window.scrollX);
+    box.style.top = top + "px";
+    box.style.left = left + "px";
+  }
+
+  function onDocDown(ev){
+    try {
+      if (!box.contains(ev.target) && !(anchorNode && anchorNode.contains && anchorNode.contains(ev.target))) {
+        cleanup();
+        onCancel();
+      }
+    } catch(_) {}
+  }
+
+  btnYes.addEventListener("click", function(ev){
+    try { ev.preventDefault(); ev.stopPropagation(); } catch(_) {}
+    cleanup();
+    onConfirm();
+  });
+
+  btnNo.addEventListener("click", function(ev){
+    try { ev.preventDefault(); ev.stopPropagation(); } catch(_) {}
+    cleanup();
+    onCancel();
+  });
+
+  document.body.appendChild(box);
+  positionBox();
+  document.addEventListener("mousedown", onDocDown, true);
+  window.addEventListener("resize", positionBox, true);
+  window.addEventListener("scroll", positionBox, true);
+
+  return { close: cleanup };
+}
+
+window.openInlineConfirm = openInlineConfirm;
 
   function handleDone(state, tabKey, row) {
     if (!row) return;
@@ -3180,7 +3661,7 @@ onNotesClick: (field && field.mods && (field.mods.notes || field.mods.initials))
     try {
       if (window.USP && window.USP.UI && window.USP.UI.TabCore && typeof window.USP.UI.TabCore.renderTab === "function") {
         var t = String(tabKey || "").toLowerCase();
-        if (t === "dev" || t === "product" || t === "project" || t === "routines") {
+        if (t === "dev" || t === "product" || t === "routines") {
           window.USP.UI.TabCore.renderTab(state, tabKey, title, opts);
           return;
         }
@@ -3352,9 +3833,44 @@ function todoView(state) {
   }
 
   function projectView(state, tabKey, title) {
-  // Use the exact same rendering path as DEV/PRODUCT so initials + right-click Notes
-  // come from the same TabCore/TableUI/FieldTypes pipeline.
-  return userDataView(state, tabKey, title, { fixed: true });
+  // 4B: Unified renderer for fixed Project table via dataTableView()
+  try { if (App.FixedTables && typeof App.FixedTables.ensureSchema === "function") App.FixedTables.ensureSchema(tabKey, state); } catch(e) {}
+
+  const PROJECT_CATEGORIES = ["kundprojekt", "volymprojekt", "samarbetsprojekt"];
+
+  function nextCategory(v) {
+    const cur = String(v || "").trim().toLowerCase();
+    const i = PROJECT_CATEGORIES.indexOf(cur);
+    const ni = (i < 0) ? 0 : ((i + 1) % PROJECT_CATEGORIES.length);
+    return PROJECT_CATEGORIES[ni];
+  }
+
+  return dataTableView(state, tabKey, title, {
+    fixed: true,
+    fieldCellRenderer: ({ row, fieldName, value, updateCell }) => {
+      if (String(fieldName) !== "Kategori") return null;
+
+      const opts = ["", "samarbete", "volym", "kund"];
+      // Ensure required option exists (non-destructive)
+      if (opts.indexOf("utveckling") === -1) opts.splice(2, 0, "utveckling");
+      try { if (localStorage && String(localStorage.USP_DEBUG_PROJECT_KATEGORI) === "1") console.info("[UI][ProjectKategori] options", opts.slice()); } catch (e) {}
+
+      const sel = el("select", {
+        class: "usp-select usp-select--compact",
+        value: (value == null ? "" : String(value)),
+        onchange: (e) => {
+          try { e && e.stopPropagation && e.stopPropagation(); } catch (_) {}
+          const v = e && e.target ? e.target.value : "";
+          updateCell(row.id, "Kategori", v);
+        },
+        onclick: (e) => { try { e && e.stopPropagation && e.stopPropagation(); } catch (_) {} },
+        onmousedown: (e) => { try { e && e.stopPropagation && e.stopPropagation(); } catch (_) {} },
+        onmouseup: (e) => { try { e && e.stopPropagation && e.stopPropagation(); } catch (_) {} },
+      }, opts.map((o) => el("option", { value: o }, o === "" ? "Välj" : o)));
+
+      return sel;
+    }
+  });
 }
 
   // ---------------------------
@@ -3454,11 +3970,17 @@ const role = App.role(state);
           el("button", { class:"btn btn-small btn-secondary", type:"button", onclick: () => {
             App.setCurrentUser(u.id);
           }}, ["Act as"]),
-          el("button", { class:"icon-btn manage-user-delete", type:"button", onclick: () => {
-            const ok = window.confirm("Delete user?");
-            if (!ok) return;
-            App.deleteUser(u.id);
-            renderList();
+          el("button", { class:"icon-btn manage-user-delete", type:"button", onclick: (ev) => {
+            const rowNode = (ev && ev.target && typeof ev.target.closest === "function") ? ev.target.closest(".manage-user-row") : null;
+            openInlineConfirm({
+              anchor: ev.currentTarget || ev.target,
+              rowNode: rowNode,
+              message: "Delete user?",
+              onConfirm: function(){
+                App.deleteUser(u.id);
+                renderList();
+              }
+            });
           }}, ["🗑"]),
         ]);
 
@@ -3514,11 +4036,17 @@ const role = App.role(state);
         openManageUsers(App.getState());
       }}, ["Save"]);
 
-      const del = el("button", { class:"btn btn-secondary", type:"button", onclick: () => {
-        const ok = window.confirm("Delete user?");
-        if (!ok) return;
-        App.deleteUser(user.id);
-        openManageUsers(App.getState());
+      const del = el("button", { class:"btn btn-secondary", type:"button", onclick: (ev) => {
+        const rowNode = (ev && ev.target && typeof ev.target.closest === "function") ? ev.target.closest(".manage-user-card, .usp-card, .card") : null;
+        openInlineConfirm({
+          anchor: ev.currentTarget || ev.target,
+          rowNode: rowNode,
+          message: "Delete user?",
+          onConfirm: function(){
+            App.deleteUser(user.id);
+            openManageUsers(App.getState());
+          }
+        });
       }}, ["Delete"]);
 
       actions.appendChild(save);

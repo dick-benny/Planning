@@ -53,7 +53,7 @@
       { name: "Kategori", type: "dropdown_project_kategori", 
  width: "17ch" },
       { name: "Start", type: "date", width: "15ch" },
-      { name: "Aktuell", type: "text", mods: { corner: true, notes: true } },
+      { name: "Aktuell", type: "text", mods: { initials: true, corner: true } },
       { name: "Nästa", type: "text", mods: { initials: true } },
       { name: "Kommande", type: "text", mods: { initials: true } },
       { name: "Slut", type: "date", width: "15ch" }
@@ -76,7 +76,7 @@ App.FixedTables.DEV = {
       { name: "Design-Po", type: "text", mods: { corner: true, notes: true } },
       { name: "Sample test", type: "text", mods: { corner: true, notes: true } },
       { name: "Stort sample", type: "text", mods: { corner: true, notes: true } },
-      { name: "Q-test", type: "text", mods: { corner: true, notes: true } },
+      { name: "Q-test", type: "text", mods: { corner: true, initials: true } },
       { name: "Prissättning", type: "text", mods: { corner: true, notes: true } }
     ]
   };
@@ -97,7 +97,7 @@ App.FixedTables.PRODUCT = {
       { name: "PO beslut", type: "text", mods: { corner: true, notes: true } },
       { name: "Shopify-ready", type: "text", mods: { corner: true, notes: true } },
       { name: "B2B-ready", type: "text", mods: { corner: true, notes: true } },
-      { name: "Drop", type: "veckonummer", mods: {  } }
+      { name: "Drop", type: "veckonummer", width: "10ch", mods: {  } }
     ]
   };
 
@@ -107,12 +107,12 @@ App.FixedTables.ROUTINES = {
     title: "Rutiner",
     version: 4,
     columns: [
-      { name: "Rutin", type: "text", key: true, mods: { notes: true } },
-      { name: "Steg1", type: "text", mods: { notes: true } },
-      { name: "Steg2", type: "text", mods: { notes: true } },
-      { name: "Steg 3", type: "text", mods: { notes: true } },
-      { name: "Steg 4", type: "text", mods: { notes: true } },
-      { name: "Steg5", type: "text", mods: { notes: true } }
+      { name: "Rutin", type: "text", key: true, mods: { pdf: true } },
+      { name: "Steg1", type: "text", mods: { pdf: true } },
+      { name: "Steg2", type: "text", mods: { pdf: true } },
+      { name: "Steg 3", type: "text", mods: { pdf: true } },
+      { name: "Steg 4", type: "text", mods: { pdf: true } },
+      { name: "Steg5", type: "text", mods: { pdf: true } }
     ]
   };
 function buildSchemaFromSpec(spec, current) {

@@ -180,6 +180,49 @@
     return btn;
   }
 
+  function renderPdfIcon(ctx) {
+    if (!ctx || typeof ctx.onPdfClick !== "function") return null;
+    const mods = ctx && ctx.mods ? ctx.mods : {};
+    if (!mods || !mods.pdf) return null;
+
+    const has = !!ctx.pdfHas;
+    const btn = el("button", {
+      class: "pdf-icon" + (has ? " has-file" : ""),
+      type:"button",
+      title: has ? "Öppna PDF" : "Ladda upp PDF",
+      style: has
+        ? "width:30px;height:22px;border-radius:8px;background:#dfe7ff;border:1px solid #98b1ff;color:#111;padding:0 6px;font-size:11px;font-weight:800;display:inline-flex;align-items:center;justify-content:center;"
+        : "width:30px;height:22px;border-radius:8px;background:#fff;border:1px solid rgba(15,23,42,.25);color:rgba(15,23,42,.7);padding:0 6px;font-size:11px;font-weight:800;display:inline-flex;align-items:center;justify-content:center;"
+    }, ["PDF"]);
+
+    btn.addEventListener("click", function (e) {
+      try { e.preventDefault(); e.stopPropagation(); } catch (_) {}
+      ctx.onPdfClick(e);
+    });
+    btn.addEventListener("contextmenu", function (e) {
+      try {
+        if (typeof ctx.onPdfUpload === "function") {
+          e.preventDefault(); e.stopPropagation();
+          ctx.onPdfUpload(e);
+          return false;
+        }
+      } catch (_) {}
+    });
+    btn.addEventListener("mouseup", function (e) {
+      try {
+        var b = (e && e.button != null) ? e.button : (e ? e.which : null);
+        if (b !== 2) return;
+        if (typeof ctx.onPdfUpload === "function") {
+          e.preventDefault(); e.stopPropagation();
+          ctx.onPdfUpload(e);
+          return false;
+        }
+      } catch (_) {}
+    });
+
+    return btn;
+  }
+
   function renderInitialsRing(ctx) {
     if (!ctx || typeof ctx.onInitialsClick !== "function") return null;
     const v = normStr(ctx.initialsValue) || "--";
@@ -273,8 +316,32 @@
 
     wrap.appendChild(el("div", { class:"act-cell", style:"flex:1;min-width:0;" }, [inner]));
 
+    // Routine-link right-click on the cell body (not on initials/notes/pdf buttons)
+    if (ctx && typeof ctx.onRoutineContextmenu === "function") {
+      function _openRoutine(ev){
+        try {
+          if (!ev) return false;
+          var t = ev.target;
+          if (t && t.closest && t.closest(".act-initials, [data-usp-initials='1'], [data-usp-initials], .note-icon, .pdf-icon, button")) {
+            return true;
+          }
+          ev.preventDefault();
+          ev.stopPropagation();
+          return ctx.onRoutineContextmenu(ev);
+        } catch (e) { return false; }
+      }
+      try { wrap.addEventListener("contextmenu", _openRoutine); } catch(e){}
+      try {
+        var cellBody = wrap.querySelector(".act-cell");
+        if (cellBody) cellBody.addEventListener("contextmenu", _openRoutine);
+      } catch(e){}
+    }
+
     const ring = renderInitialsRing(ctx);
     if (ring) wrap.appendChild(ring);
+
+    const pdfBtn = renderPdfIcon(ctx);
+    if (pdfBtn) wrap.appendChild(pdfBtn);
 
     // Notes icon whenever notes support exists for the field
     const notesBtn = renderNotesIcon(ctx);
@@ -317,8 +384,8 @@
     const disabled = !!(ctx && ctx.disabled);
     const value = normalizeValue("date", ctx && ctx.value);
 
-    const display = el("div", { class:"act-date-display", text: value || "-- -- --", style:"width:100%;min-width:12ch;font-size:0.85em;text-align:center;display:flex;align-items:center;justify-content:center;" }, []);
-    const picker = el("input", { class:"act-date-picker", type:"date", value, disabled, style:"width:100%;min-width:12ch;font-size:0.85em;text-align:center;" }, []);
+    const display = el("div", { class:"act-date-display", text: value || "-- -- --", style:"width:15ch;min-width:15ch;max-width:15ch;font-size:0.85em;text-align:center;" }, []);
+    const picker = el("input", { class:"act-date-picker", type:"date", value, disabled, style:"width:15ch;min-width:15ch;max-width:15ch;font-size:0.85em;text-align:center;" }, []);
 
     const isOverdue = !!((ctx && ctx.overdue) || (ctx && ctx.mods && ctx.mods.overdue));
     if (isOverdue) {
@@ -360,7 +427,7 @@
     const value = normalizeValue("week", ctx && ctx.value);
     const label = value ? ("v" + value.slice(-2)) : "--";
 
-    const display = el("div", { class:"week-display", style:"width:100%;min-width:10ch;display:flex;align-items:center;justify-content:center;" }, [
+    const display = el("div", { class:"week-display", style:"width:100%;justify-content:flex-start;" }, [
       el("span", { text: label }, [])
     ]);
 
@@ -397,9 +464,9 @@
   function renderQuarter(ctx) {
     const disabled = !!(ctx && ctx.disabled);
     const value = normalizeValue("quarter", ctx && ctx.value);
-    const label = value || "--";
+    const label = value || "–";
 
-    const display = el("div", { class:"quarter-display", style:"width:100%;min-width:10ch;display:flex;align-items:center;justify-content:center;" }, [
+    const display = el("div", { class:"quarter-display", style:"width:100%;justify-content:flex-start;" }, [
       el("span", { text: label }, [])
     ]);
 
@@ -414,7 +481,7 @@
     picker.addEventListener("change", function () {
       const dt = parseDateYYYYMMDD(picker.value);
       const q = dt ? quarterFromDate(dt) : "";
-      display.querySelector("span").textContent = q || "--";
+      display.querySelector("span").textContent = q || "–";
       if (ctx && typeof ctx.onChange === "function") ctx.onChange(q);
     });
 
@@ -670,6 +737,7 @@ if (base === "dropdown_registry") {
     { key:"corner", label:"Hörnmarkör" },
     { key:"initials", label:"Initialer" },
     { key:"notes", label:"Notes" },
+    { key:"pdf", label:"PDF" },
   ];
 
   App.FieldTypes = App.FieldTypes || {};
