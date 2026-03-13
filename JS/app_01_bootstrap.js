@@ -25,7 +25,7 @@
   const LS_USER = "usp_user_v1";
 
   function getDataMode(){
-    try { return (App.Config && App.Config.getDataMode) ? App.Config.getDataMode() : "local"; } catch(e){ return "local"; }
+    try { return (App.Config && App.Config.getDataMode) ? App.Config.getDataMode() : "server"; } catch(e){ return "server"; }
   }
 
   // ---------------------------
@@ -360,7 +360,9 @@ function startServerHydration(){
         if (remote.settings) merged.settings = remote.settings;
         merged.updatedAt = remote.updatedAt || merged.updatedAt || nowIso();
         _hydrationComplete = true;
+        _suspendPersist = true;
         App.commitState(merged);
+        _suspendPersist = false;
         try{ if (USP.UI && typeof USP.UI.render === "function") USP.UI.render(App.getState()); }catch(eR){}
       }).catch(function(err){
         console.error("DB loadState error:", err);
@@ -376,6 +378,7 @@ function startServerHydration(){
 App.setLoggedInUser = function(user){
   try{
     var st = App.getState ? App.getState() : (_state || defaultState());
+    if (getDataMode() === "server") _hydrationComplete = false;
     st.session = st.session || {};
     st.ui = st.ui || {};
     var acting = ensureUserFromAuth(st, user);
@@ -485,10 +488,13 @@ App.logout = function logout(){
   // ---------------------------
   let _state = null;
   let _hydrationComplete = false;
+  let _suspendPersist = false;
 
   App.getState = function getState() { return _state; };
 
   function persistState(st) {
+    if (_suspendPersist) return;
+
     const m = getDataMode();
     if (m === "local") {
       try { localStorage.setItem(LS_STATE, JSON.stringify(st)); } catch (e) {}
@@ -1185,7 +1191,6 @@ if (getDataMode() === "local") {
     // Server mode: hydrate state from DB after first paint (only after login)
 try{
   if (_state && _state.session && _state.session.authUser) startServerHydration();
-  else _hydrationComplete = true;
 }catch(eH2){ _hydrationComplete = true; }
 
 

@@ -11,7 +11,7 @@
   App.DB = App.DB || {};
 
   function mode() { 
-    return (App.Config && App.Config.getDataMode) ? App.Config.getDataMode() : "local"; 
+    return (App.Config && App.Config.getDataMode) ? App.Config.getDataMode() : "server"; 
   }
 
   App.DB.ping = async function ping() {

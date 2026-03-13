@@ -23,28 +23,10 @@
   
   // -----------------------------
   // Single source of truth: DataMode
-  // - "local"  : localhost / file builds / offline work (localStorage only)
-  // - "server" : planning.cappelendimyr.com (remote DB via /api/state)
-  // Keep naming stable ("server") because App.DB adapter expects it.
+  // Always run in server mode so all pages hydrate from /api/state.
   // -----------------------------
   App.Config.getDataMode = function getDataMode() {
-    try {
-      const host = String((location && location.hostname) || "").toLowerCase();
-      // Local dev / file builds typically have empty hostname
-      const isLocal =
-        !host ||
-        host === "localhost" ||
-        host === "127.0.0.1" ||
-        host === "::1" ||
-        host.endsWith(".local");
-
-      const isPlanningHost = host === "planning.cappelendimyr.com";
-
-      if (isPlanningHost) return "server";
-      return isLocal ? "local" : "local";
-    } catch (e) {
-      return "local";
-    }
+    return "server";
   };
 
   // Optional alias namespace for clarity (does not change behavior)
@@ -63,8 +45,8 @@
   (function(){
     const host = String((location && location.hostname) || "").toLowerCase();
     const dm = App.Config.getDataMode();
-    // Keep existing flag for compatibility; "server" means remote DB.
-    App.Config.DB_MODE = (dm === "server") ? "server" : "local";
+    // Keep existing flag for compatibility.
+    App.Config.DB_MODE = "server";
 
     // Legacy placeholders (kept to avoid breaking any future code that expects them)
     App.Config.SUPABASE_URL = App.Config.SUPABASE_URL || "https://nchgudsqleylfdysgabi.supabase.co";
