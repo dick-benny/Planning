@@ -174,6 +174,7 @@
     TODO: "todo",
     ROUTINES: "routines",
     SETTINGS: "settings",
+    STATISTICS: "statistics",
   };
 
   // ---------------------------
@@ -186,6 +187,7 @@
       product: { fields: [{ id: uid("f"), name: "Produkt", type: "text", order: 0 }] },
       todo: { fields: [{ id: uid("f"), name: "Att göra", type: "text", order: 0 }] },
       routines: { fields: [{ id: uid("f"), name: "Rutin", type: "text", order: 0 }] },
+      statistics: { fields: [{ id: uid("f"), name: "Statistic", type: "text", order: 0 }] },
     };
   }
 
@@ -195,6 +197,7 @@
       product: [],
       todo: [],
       routines: [],
+      statistics: [],
     };
   }
 

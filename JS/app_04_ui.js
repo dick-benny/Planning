@@ -190,6 +190,11 @@ USP.UI.TabSpec = USP.UI.TabSpec || (function(){
       key: "routines",
       label: "Rutiner"
       // intentionally no newRow in R4A
+    },
+    statistics: {
+      key: "statistics",
+      label: "Statistik"
+      // no newRow for statistics
     }
   };
 })();
@@ -2758,6 +2763,7 @@ function byId(id) { return document.getElementById(id); }
     if (key === App.Tabs.TODO) return "TODO";
     if (key === App.Tabs.PROJECT) return "PROJEKT";
     if (key === App.Tabs.ROUTINES) return "RUTINER";
+    if (key === App.Tabs.STATISTICS) return "STATISTIK";
     return String(key || "").toUpperCase();
   }
 
@@ -2776,7 +2782,7 @@ function byId(id) { return document.getElementById(id); }
 
     const tabs = el("div", { class: "tabs", id: "tabs" }, []);
     const current = App.getTab(state);
-    [App.Tabs.DEV, App.Tabs.PRODUCT, App.Tabs.PROJECT, App.Tabs.TODO, App.Tabs.ROUTINES].forEach((k) => {
+    [App.Tabs.DEV, App.Tabs.PRODUCT, App.Tabs.PROJECT, App.Tabs.TODO, App.Tabs.ROUTINES, App.Tabs.STATISTICS].forEach((k) => {
       tabs.appendChild(el("button", {
         class: "tab " + ((current === k || (k === (App.Tabs && App.Tabs.PROJECT) && String(current) === "project")) ? "is-active" : ""),
         type: "button",
@@ -4697,8 +4703,29 @@ const role = App.role(state);
   }
 
 
+  // ---------------------------
+  // Statistics view
+  // ---------------------------
+  function statisticsView(state) {
+    const view = byId("usp-view");
+    if (!view) return;
 
-
+    // Delegate to separate statistics module (app_13_statistics.js)
+    if (window.USP && window.USP.Statistics && typeof window.USP.Statistics.render === "function") {
+      window.USP.Statistics.render(state, view);
+    } else {
+      // Fallback if statistics module not loaded
+      view.innerHTML = "";
+      view.appendChild(el("div", { 
+        class: "hero",
+        style: "padding:40px;text-align:center;color:#999;" 
+      }, [
+        el("div", {}, ["Statistics module not loaded"]),
+        el("div", { style: "margin-top:10px;font-size:14px;" }, ["Please ensure app_13_statistics.js is included"])
+      ]));
+      console.error("[UI] Statistics module (USP.Statistics) not available");
+    }
+  }
 
 
 
@@ -4880,6 +4907,8 @@ try{ if(String(location.hostname)!=="planning.cappelendimyr.com") console.log("[
     const roleMode = (App.getRoleMode ? App.getRoleMode(state) : role);
 
     if (tab === App.Tabs.SETTINGS) return settingsView(state);
+
+    if (tab === App.Tabs.STATISTICS) return statisticsView(state);
 
     if (String(tab) === "default") {
       if (role === "admin") return defaultView(state);
