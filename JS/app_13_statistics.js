@@ -94,6 +94,37 @@
     });
   }
 
+  function normalizeSource(order) {
+    return (
+      order?.source ||
+      order?.source_type ||
+      order?.store_type ||
+      order?.shop_source ||
+      order?.shop ||
+      "Unknown"
+    );
+  }
+
+  function eventTypeLabel(eventType) {
+    if (eventType === "draft_order_created") return "Draft";
+    if (eventType === "order_created") return "Order";
+    return eventType || "Unknown";
+  }
+
+  function buildSeriesColor(index) {
+    const palette = [
+      { bg: "#4A90E2", border: "#357ABD" },
+      { bg: "#7ED321", border: "#5FA81A" },
+      { bg: "#F5A623", border: "#D98C0E" },
+      { bg: "#D0021B", border: "#A00117" },
+      { bg: "#50E3C2", border: "#2DBA9B" },
+      { bg: "#9013FE", border: "#6A0FC0" },
+      { bg: "#B8E986", border: "#97C96B" },
+      { bg: "#4A4A4A", border: "#2F2F2F" },
+    ];
+    return palette[index % palette.length];
+  }
+
   // ---------------------------
   // Process API response for orders
   // ---------------------------
@@ -101,7 +132,8 @@
     if (!apiResponse || !apiResponse.items || !Array.isArray(apiResponse.items)) {
       return { 
         drafts: { dailyData: [], totalSales: 0, orderCount: 0, currency: 'EUR' },
-        orders: { dailyData: [], totalSales: 0, orderCount: 0, currency: 'EUR' }
+        orders: { dailyData: [], totalSales: 0, orderCount: 0, currency: 'EUR' },
+        series: []
       };
     }
 
@@ -125,9 +157,41 @@
       };
     };
 
+    const seriesMap = {};
+    allOrders.forEach((order) => {
+      const source = normalizeSource(order);
+      const eventType = order?.event_type || "unknown_event";
+      const key = `${source}::${eventType}`;
+
+      if (!seriesMap[key]) {
+        seriesMap[key] = {
+          source,
+          eventType,
+          orders: []
+        };
+      }
+      seriesMap[key].orders.push(order);
+    });
+
+    const series = Object.values(seriesMap)
+      .sort((a, b) => `${a.source} ${a.eventType}`.localeCompare(`${b.source} ${b.eventType}`))
+      .map((entry, idx) => {
+        const processed = processType(entry.orders);
+        const color = buildSeriesColor(idx);
+        return {
+          key: `${entry.source}::${entry.eventType}`,
+          source: entry.source,
+          eventType: entry.eventType,
+          label: `${entry.source} - ${eventTypeLabel(entry.eventType)}`,
+          color,
+          ...processed
+        };
+      });
+
     return {
       drafts: processType(draftOrders),
-      orders: processType(actualOrders)
+      orders: processType(actualOrders),
+      series
     };
   }
 
@@ -185,8 +249,8 @@
   // ---------------------------
   // UI: Combined daily sales chart (both order types)
   // ---------------------------
-  function renderCombinedDailySalesChart(drafts, orders, draftsCurrency, ordersCurrency) {
-    if ((!drafts || drafts.length === 0) && (!orders || orders.length === 0)) {
+  function renderCombinedDailySalesChart(seriesList) {
+    if (!seriesList || seriesList.length === 0) {
       return el("div", {
         style: "background:#f9f9f9;border-radius:8px;padding:40px;text-align:center;color:#999;"
       }, ["Ingen försäljningsdata tillgänglig"]);
@@ -209,34 +273,38 @@
 
     // Create a merged daily data structure
     const allDates = new Set();
-    if (drafts && drafts.length > 0) {
-      drafts.forEach(d => allDates.add(d.date));
-    }
-    if (orders && orders.length > 0) {
-      orders.forEach(o => allDates.add(o.date));
-    }
+    seriesList.forEach((series) => {
+      (series.dailyData || []).forEach((d) => allDates.add(d.date));
+    });
 
     const sortedDates = Array.from(allDates).sort();
-    
-    // Create maps for quick lookup
-    const draftMap = {};
-    const ordersMap = {};
-    
-    if (drafts && drafts.length > 0) {
-      drafts.forEach(d => { draftMap[d.date] = d.total; });
-    }
-    if (orders && orders.length > 0) {
-      orders.forEach(o => { ordersMap[o.date] = o.total; });
-    }
 
     // Prepare data for Chart.js
     const labels = sortedDates.map(date => {
       const [year, month, day] = date.split('-');
       return `${day}/${month}`;
     });
-    
-    const draftData = sortedDates.map(date => draftMap[date] || 0);
-    const ordersData = sortedDates.map(date => ordersMap[date] || 0);
+
+    const datasets = seriesList.map((series, idx) => {
+      const byDate = {};
+      (series.dailyData || []).forEach((d) => {
+        byDate[d.date] = d.total;
+      });
+
+      return {
+        label: `${series.label} (${series.currency || "EUR"})`,
+        data: sortedDates.map((date) => byDate[date] || 0),
+        backgroundColor: series.color.bg,
+        borderColor: series.color.border,
+        borderWidth: 2,
+        borderRadius: 6,
+        hoverBackgroundColor: series.color.border,
+        categoryPercentage: 0.6,
+        barPercentage: 0.55,
+        maxBarThickness: 22,
+        order: idx + 1
+      };
+    });
 
     // Create Chart.js chart
     try {
@@ -245,28 +313,7 @@
           type: 'bar',
           data: {
             labels: labels,
-            datasets: [
-              {
-                label: `Utkastordrar (${draftsCurrency})`,
-                data: draftData,
-                backgroundColor: '#4A90E2',
-                borderColor: '#357ABD',
-                borderWidth: 2,
-                borderRadius: 6,
-                hoverBackgroundColor: '#357ABD',
-                order: 2
-              },
-              {
-                label: `Slutförda ordrar (${ordersCurrency})`,
-                data: ordersData,
-                backgroundColor: '#7ED321',
-                borderColor: '#5FA81A',
-                borderWidth: 2,
-                borderRadius: 6,
-                hoverBackgroundColor: '#5FA81A',
-                order: 1
-              }
-            ]
+            datasets: datasets
           },
           options: {
             responsive: true,
@@ -448,11 +495,11 @@
 
       // Process the orders data
       const processedData = processOrdersData(apiResult.data);
-      const { drafts, orders } = processedData;
+      const { drafts, orders, series } = processedData;
 
       // COMBINED CHART at the top
       viewElement.appendChild(el("div", { style: "margin-top:20px;" }, [
-        renderCombinedDailySalesChart(drafts.dailyData, orders.dailyData, drafts.currency, orders.currency)
+        renderCombinedDailySalesChart(series)
       ]));
 
       // DRAFT ORDERS SECTION
