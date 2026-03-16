@@ -23,10 +23,25 @@
   
   // -----------------------------
   // Single source of truth: DataMode
-  // Always run in server mode so all pages hydrate from /api/state.
+  // - planning.cappelendimyr.com -> server
+  // - all other hosts / file preview -> local
+  //   This keeps local test data between restarts until the admin explicitly
+  //   uses "Clean local data" in Settings.
   // -----------------------------
   App.Config.getDataMode = function getDataMode() {
-    return "server";
+    try {
+      var forced = String(App.Config.get("USP_DATA_MODE", "") || "").trim().toLowerCase();
+      if (forced === "server" || forced === "local") return forced;
+    } catch (e) {}
+
+    try {
+      var host = String((location && location.hostname) || "").trim().toLowerCase();
+      if (!host) return "local";
+      if (host === "planning.cappelendimyr.com") return "server";
+      return "local";
+    } catch (e2) {
+      return "local";
+    }
   };
 
   // Optional alias namespace for clarity (does not change behavior)
@@ -46,7 +61,7 @@
     const host = String((location && location.hostname) || "").toLowerCase();
     const dm = App.Config.getDataMode();
     // Keep existing flag for compatibility.
-    App.Config.DB_MODE = "server";
+    App.Config.DB_MODE = dm;
 
     // Legacy placeholders (kept to avoid breaking any future code that expects them)
     App.Config.SUPABASE_URL = App.Config.SUPABASE_URL || "https://nchgudsqleylfdysgabi.supabase.co";

@@ -511,20 +511,8 @@ _applyBtnState(_hasText(nextLog));
           return function(ev){
             try{
               if (ev) { ev.preventDefault(); ev.stopPropagation(); }
-              var stNow = safeGetState();
-              var bindings = (stNow && stNow.settings && stNow.settings.routineBindings) ? stNow.settings.routineBindings : {};
-              var rid = bindings && bindings[tabKey] ? bindings[tabKey][fieldName] : "";
-              if (!rid) {
-                if (UI && typeof UI.openRoutineMissingModal === "function") UI.openRoutineMissingModal();
-                return false;
-              }
-              var routines = (stNow && stNow.data && Array.isArray(stNow.data.routines)) ? stNow.data.routines : [];
-              var rr = routines.find(function(x){ return String(x && x.id) === String(rid); }) || null;
-              if (rr) {
-                if (UI && typeof UI.openRoutinePreviewModal === "function") UI.openRoutinePreviewModal(tabKey, fieldName, rr);
-              } else {
-                if (UI && typeof UI.openRoutineMissingModal === "function") UI.openRoutineMissingModal();
-              }
+              if (UI && typeof UI.openBoundRoutinePdf === "function") UI.openBoundRoutinePdf(tabKey, fieldName, safeGetState());
+              else if (UI && typeof UI.openRoutineMissingModal === "function") UI.openRoutineMissingModal();
               return false;
             }catch(eRL){ try{ console.error("[RoutineLinks] cell contextmenu failed", eRL); }catch(_){} return false; }
           };
@@ -1002,8 +990,29 @@ function renderTable(state, tabKey, title){
     var table = elFn("table", { class: "usp-table" }, []);
     var thead = elFn("thead", {}, []);
     thead.appendChild(elFn("tr", {}, (showActions ? fields.concat([{name:"Action", _action:true}]) : fields).map(function(f){
-      var st = f.width ? ("width:"+f.width+";max-width:"+f.width+";") : null;
-      return elFn("th", { style: st }, [f.name]);
+      var st = (f.width ? ("width:"+f.width+";max-width:"+f.width+";") : "") + "position:relative;";
+      if (f && f._action) return elFn("th", { style: st }, [f.name]);
+      var children = [f.name];
+      try{
+        var UI = (window.USP && window.USP.UI) ? window.USP.UI : null;
+        var allowRoutine = !!(UI && typeof UI.isRoutineLinkAllowed === "function" && UI.isRoutineLinkAllowed(key, f.name));
+        if (allowRoutine) {
+          var badge = elFn("button", {
+            type: "button",
+            title: "Öppna kopplad rutin",
+            style: "position:absolute;top:6px;right:6px;width:18px;height:18px;border-radius:999px;border:1px solid rgba(17,24,39,.18);background:#fff;color:#111;font-size:11px;font-weight:900;line-height:16px;padding:0;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;z-index:2;",
+            onclick: function(ev){
+              try{ if (ev) { ev.preventDefault(); ev.stopPropagation(); } }catch(_){}
+              try{
+                if (UI && typeof UI.openBoundRoutinePdf === "function") UI.openBoundRoutinePdf(key, f.name, safeGetState());
+                else if (UI && typeof UI.openRoutineMissingModal === "function") UI.openRoutineMissingModal();
+              }catch(eB){ try{ console.error("[RoutineLinks] header badge click failed", eB); }catch(_){} }
+            }
+          }, ["R"]);
+          children.push(badge);
+        }
+      }catch(eHb){}
+      return elFn("th", { style: st }, children);
     })));
     table.appendChild(thead);
 
@@ -1062,27 +1071,13 @@ function renderTable(state, tabKey, title){
           if (allowRoutine) {
             tdAttrs.oncontextmenu = function(ev){
               try{
-                // Let initials / notes / buttons keep their own right-click behavior.
                 var t = ev && ev.target ? ev.target : null;
                 if (t && t.closest && t.closest(".act-initials, [data-usp-initials='1'], [data-usp-initials], .note-icon, button, input, textarea, select")) {
                   return true;
                 }
                 if (ev) { ev.preventDefault(); ev.stopPropagation(); }
-                var AppNow = _getApp();
-                var stNow = safeGetState();
-                var bindings = (stNow && stNow.settings && stNow.settings.routineBindings) ? stNow.settings.routineBindings : {};
-                var rid = bindings && bindings[key] ? bindings[key][f.name] : "";
-                if (!rid) {
-                  if (RL && typeof RL.openRoutineMissingModal === "function") RL.openRoutineMissingModal();
-                  return false;
-                }
-                var routines = (stNow && stNow.data && Array.isArray(stNow.data.routines)) ? stNow.data.routines : [];
-                var rr = routines.find(function(x){ return String(x && x.id) === String(rid); }) || null;
-                if (rr) {
-                  if (RL && typeof RL.openRoutinePreviewModal === "function") RL.openRoutinePreviewModal(key, f.name, rr);
-                } else {
-                  if (RL && typeof RL.openRoutineMissingModal === "function") RL.openRoutineMissingModal();
-                }
+                if (RL && typeof RL.openBoundRoutinePdf === "function") RL.openBoundRoutinePdf(key, f.name, safeGetState());
+                else if (RL && typeof RL.openRoutineMissingModal === "function") RL.openRoutineMissingModal();
                 return false;
               }catch(eRL){
                 try{ console.error("[RoutineLinks] td contextmenu failed", eRL); }catch(_){}

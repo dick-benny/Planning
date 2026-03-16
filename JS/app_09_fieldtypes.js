@@ -180,6 +180,25 @@
     return btn;
   }
 
+  function renderRoutineBadge(ctx) {
+    if (!ctx || typeof ctx.onRoutineClick !== 'function') return null;
+    if (!ctx.routineHas) return null;
+
+    const btn = el('button', {
+      class: 'routine-badge',
+      type:'button',
+      title:'Öppna rutin',
+      style:'width:22px;height:22px;border-radius:999px;background:#efe9ff;border:1px solid #c7b8ff;color:#4c2fd6;padding:0;font-size:11px;font-weight:900;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;flex:0 0 auto;'
+    }, ['R']);
+
+    btn.addEventListener('click', function (e) {
+      try { e.preventDefault(); e.stopPropagation(); } catch (_) {}
+      ctx.onRoutineClick(e);
+    });
+
+    return btn;
+  }
+
   function renderPdfIcon(ctx) {
     if (!ctx || typeof ctx.onPdfClick !== "function") return null;
     const mods = ctx && ctx.mods ? ctx.mods : {};
@@ -316,29 +335,11 @@
 
     wrap.appendChild(el("div", { class:"act-cell", style:"flex:1;min-width:0;" }, [inner]));
 
-    // Routine-link right-click on the cell body (not on initials/notes/pdf buttons)
-    if (ctx && typeof ctx.onRoutineContextmenu === "function") {
-      function _openRoutine(ev){
-        try {
-          if (!ev) return false;
-          var t = ev.target;
-          if (t && t.closest && t.closest(".act-initials, [data-usp-initials='1'], [data-usp-initials], .note-icon, .pdf-icon, button")) {
-            return true;
-          }
-          ev.preventDefault();
-          ev.stopPropagation();
-          return ctx.onRoutineContextmenu(ev);
-        } catch (e) { return false; }
-      }
-      try { wrap.addEventListener("contextmenu", _openRoutine); } catch(e){}
-      try {
-        var cellBody = wrap.querySelector(".act-cell");
-        if (cellBody) cellBody.addEventListener("contextmenu", _openRoutine);
-      } catch(e){}
-    }
-
     const ring = renderInitialsRing(ctx);
     if (ring) wrap.appendChild(ring);
+
+    const routineBtn = renderRoutineBadge(ctx);
+    if (routineBtn) wrap.appendChild(routineBtn);
 
     const pdfBtn = renderPdfIcon(ctx);
     if (pdfBtn) wrap.appendChild(pdfBtn);

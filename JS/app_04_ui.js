@@ -547,6 +547,70 @@ actions.appendChild(btnSave);
     return rows.find(r => String(r && r.id) === String(rowId)) || null;
   }
 
+  function normRoutineKey(v) {
+    try { return String(v == null ? '' : v).trim().toLowerCase().replace(/\s+/g, ' '); } catch (e) { return ''; }
+  }
+
+  function resolveRoutineBinding(tabKey, fieldName, state) {
+    try {
+      const bindings = getRoutineBindings(state);
+      const t = String(tabKey || '').toLowerCase();
+      const f = String(fieldName || '').trim();
+      const tabMap = (bindings && bindings[t] && typeof bindings[t] === 'object') ? bindings[t] : {};
+      if (tabMap && Object.prototype.hasOwnProperty.call(tabMap, f) && tabMap[f]) return String(tabMap[f]);
+      const want = normRoutineKey(f);
+      const keys = Object.keys(tabMap || {});
+      for (let i = 0; i < keys.length; i++) {
+        const k = keys[i];
+        if (normRoutineKey(k) === want && tabMap[k]) return String(tabMap[k]);
+      }
+    } catch (e) {}
+    return '';
+  }
+
+  function findRoutinePdfValue(routineRow) {
+    try {
+      const fields = (routineRow && routineRow.fields) ? routineRow.fields : {};
+      if (fields && fields['Rutin__pdf'] && fields['Rutin__pdf'].dataUrl) return fields['Rutin__pdf'];
+      if (fields && fields['Dokument__pdf'] && fields['Dokument__pdf'].dataUrl) return fields['Dokument__pdf'];
+      const keys = Object.keys(fields || {});
+      for (let i = 0; i < keys.length; i++) {
+        const k = keys[i];
+        if (String(k).indexOf('__pdf') < 0) continue;
+        const v = fields[k];
+        if (v && v.dataUrl) return v;
+      }
+    } catch (e) {}
+    return null;
+  }
+
+  function resolveRoutineRowForBinding(tabKey, fieldName, state) {
+    try {
+      const rows = getRoutineRows(state);
+      const rid = resolveRoutineBinding(tabKey, fieldName, state);
+      if (!rid) return null;
+      let row = rows.find(r => String(r && r.id) === String(rid)) || null;
+      if (row) return row;
+      const want = normRoutineKey(rid);
+      row = rows.find(r => normRoutineKey(getRoutineRowLabel(r)) === want) || null;
+      return row || null;
+    } catch (e) { return null; }
+  }
+
+  function openBoundRoutinePdf(tabKey, fieldName, state) {
+    try {
+      const st = state || (App.getState ? App.getState() : null) || {};
+      const rr = resolveRoutineRowForBinding(tabKey, fieldName, st);
+      if (!rr) return openRoutineMissingModal();
+      const pdfVal = findRoutinePdfValue(rr);
+      if (pdfVal && pdfVal.dataUrl) return openPdfViewerModal(pdfVal);
+      return openPdfMissingModal();
+    } catch (e) {
+      try { console.error('[RoutineLinks] openBoundRoutinePdf failed', e); } catch(_) {}
+      return openRoutineMissingModal();
+    }
+  }
+
   function openRoutinePreviewModal(tabKey, fieldName, routineRow) {
     try {
       closeAnyModal();
@@ -837,7 +901,7 @@ actions.appendChild(btnSave);
       const modal = el("div", { class:"usp-modal", style:"max-width:820px;" }, []);
       modal.appendChild(el("div", { class:"modal-title" }, ["Koppla kolumn-rutin"]));
       modal.appendChild(el("div", { class:"hint", style:"margin-bottom:12px;" }, [
-        "Välj vilken rutin som ska öppnas vid högerklick i vald kolumn."
+        "Välj vilken rutin som ska öppnas via R-badge i vald kolumn."
       ]));
 
       const wrap = el("div", { style:"display:flex;flex-direction:column;gap:16px;max-height:60vh;overflow:auto;" }, []);
@@ -874,10 +938,13 @@ actions.appendChild(btnSave);
 
           const btnTest = el("button", { class:"btn btn-secondary", type:"button" }, ["Testa"]);
           btnTest.addEventListener("click", function(){
-            const rid = String(bindings[tabKey][fieldName] || sel.value || "");
-            const rr = rid ? getRoutineRowById(rid, App.getState ? App.getState() : st) : null;
-            if (rr) openRoutinePreviewModal(tabKey, fieldName, rr);
-            else openRoutineMissingModal();
+            const localBindings = JSON.parse(JSON.stringify(bindings || {}));
+            localBindings[tabKey] = localBindings[tabKey] || {};
+            if (sel.value) localBindings[tabKey][fieldName] = String(sel.value);
+            else delete localBindings[tabKey][fieldName];
+            const fakeState = (App.getState ? App.getState() : st) || st || {};
+            const nextState = Object.assign({}, fakeState, { settings: Object.assign({}, (fakeState && fakeState.settings) || {}, { routineBindings: localBindings }) });
+            openBoundRoutinePdf(tabKey, fieldName, nextState);
           });
           row.appendChild(btnTest);
 
@@ -931,6 +998,9 @@ actions.appendChild(btnSave);
   window.USP.UI.openRoutineMissingModal = openRoutineMissingModal;
   window.USP.UI.openPdfMissingModal = openPdfMissingModal;
   window.USP.UI.openPdfViewerModal = openPdfViewerModal;
+  window.USP.UI.resolveRoutineBinding = resolveRoutineBinding;
+  window.USP.UI.resolveRoutineRowForBinding = resolveRoutineRowForBinding;
+  window.USP.UI.openBoundRoutinePdf = openBoundRoutinePdf;
   window.USP.UI.openColumnRoutineBindingsModal = openColumnRoutineBindingsModal;
 
   function renderSettingsPopover(state) {
@@ -1517,71 +1587,31 @@ function isOverdueDate(val) {
       rowName = (row && row.fields && firstCol) ? String(row.fields[firstCol] || "").trim() : "";
     }catch(e){}
 
-    closeAnyModal();
-
-    const colTitle = String(displayField || fieldName || "Anteckning");
-    const parts = [tableTitleForTab(tabKey)];
-    if (rowName) parts.push(rowName);
-    parts.push(colTitle);
-    const title = parts.join(" – ");
-
-    // Existing notes log
+    // Route legacy callers into the same Notes UI as DEV/PRODUCT.
     const existingLog = readNotesLog((row && row.fields) ? row.fields : {}, fieldName);
+    const onSave = function(nextLog){
+      try{
+        const st = (typeof App.getState === "function") ? App.getState() : null;
+        const cur = getRowSafe(tabKey, rowId, st) || row;
+        if (!cur) return;
 
-    const overlay = el("div", { class: "usp-modal-overlay" }, []);
-    const modal = el("div", { class: "usp-modal" }, []);
-    const h = el("div", { class: "modal-title" }, [title]);
+        const nextRow = Object.assign({}, cur, {
+          updatedAt: new Date().toISOString(),
+          fields: Object.assign({}, cur.fields || {})
+        });
 
-    const existing = el("div", { class: "modal-notes-existing" }, []);
-    if (existingLog && existingLog.length) {
-      existing.appendChild(el("div", { class:"modal-notes-label" }, ["Befintliga anteckningar:"]));
-      existing.appendChild(el("pre", { class:"modal-notes-pre" }, [formatNotesLog(existingLog)]));
-    }
+        const log = Array.isArray(nextLog) ? nextLog : [];
+        writeNotesLog(nextRow.fields, fieldName, log);
 
-    const ta = el("textarea", { class:"modal-textarea", rows:"5", placeholder:"Skriv anteckning..." }, []);
+        if (typeof App.upsertRow === "function") App.upsertRow(tabKey, nextRow);
+      }catch(e){}
+    };
 
-    const actions = el("div", { class: "modal-actions" }, []);
-    const btnCancel = el("button", { class:"btn", type:"button" }, ["Cancel"]);
-    const btnSave = el("button", { class:"btn", type:"button" }, ["Save"]);
-
-    btnCancel.addEventListener("click", function(){ overlay.remove(); });
-
-    btnSave.addEventListener("click", function(){
-      const t = String(ta.value || "").trim();
-      if (!t) { overlay.remove(); return; }
-
-      const st = (typeof App.getState === "function") ? App.getState() : null;
-      const cur = getRowSafe(tabKey, rowId, st) || row;
-      if (!cur) { overlay.remove(); return; }
-
-      const nextRow = Object.assign({}, cur, {
-        updatedAt: new Date().toISOString(),
-        fields: Object.assign({}, cur.fields || {})
-      });
-
-      const log = readNotesLog(nextRow.fields, fieldName);
-      log.push({ ts: new Date().toISOString(), by: currentInitials(), text: t });
-      writeNotesLog(nextRow.fields, fieldName, log);
-
-      if (typeof App.upsertRow === "function") App.upsertRow(tabKey, nextRow);
-      overlay.remove();
+    return openNotesModal(tabKey, fieldName, existingLog, onSave, {
+      rowId: rowId,
+      rowName: rowName,
+      label: String(displayField || fieldName || "Anteckning")
     });
-
-    actions.appendChild(btnCancel);
-    actions.appendChild(btnSave);
-
-    modal.appendChild(h);
-    if (existingLog && existingLog.length) modal.appendChild(existing);
-    modal.appendChild(ta);
-    modal.appendChild(actions);
-    overlay.appendChild(modal);
-
-    overlay.addEventListener("click", function(e){
-      if (e && e.target === overlay) overlay.remove();
-    });
-
-    document.body.appendChild(overlay);
-    try { ta.focus(); } catch(e) {}
   }
 
 
@@ -4321,8 +4351,6 @@ const role = App.role(state);
       const FieldTypes = (App && App.FieldTypes) ? App.FieldTypes : null;
       const spec = (App && App.FixedTables) ? App.FixedTables.PRODUCT : null;
 
-      const headers = ["Koll. Q", "PO beslut", "Shopify-ready", "B2B-ready", "Drop"];
-
       const normName = (s) => String(s || "")
         .toLowerCase()
         .replace(/[åä]/g, "a")
@@ -4330,20 +4358,22 @@ const role = App.role(state);
         .replace(/[^a-z0-9]+/g, "-")
         .replace(/^-+|-+$/g, "");
 
-      const findCol = (name) => {
-        if (!spec || !Array.isArray(spec.columns)) return null;
-        const t = normName(name);
-        for (let i=0;i<spec.columns.length;i++){
-          const c = spec.columns[i];
-          if (normName(c && c.name) === t) return c;
-        }
-        return null;
-      };
+      // Dynamic DEFAULT/PRODUCT columns from FixedTables.PRODUCT.
+      // Keep the first two setup fields (Produkt, Kategori) out of DEFAULT and
+      // let everything after them appear automatically.
+      const allProductCols = (spec && Array.isArray(spec.columns)) ? spec.columns.slice() : [];
+      const cols = allProductCols
+        .filter((c, idx) => {
+          const name = String((c && c.name) || "").trim();
+          if (!name) return false;
+          if (idx < 2) return false;
+          return true;
+        })
+        .map((c) => ({ label: String((c && c.name) || "").trim(), def: c }));
 
-      const cols = headers.map(h => ({ label: h, def: findCol(h) }));
-      const missing = cols.filter(c => !c.def).map(c => c.label);
-      if (missing.length) {
-        view.appendChild(el("div", { class:"muted", style:"margin-top:12px;" }, ["Saknar kolumn(er) i FixedTables.PRODUCT: " + missing.join(", ")]));
+      if (!cols.length) {
+        view.appendChild(el("div", { class:"muted", style:"margin-top:12px;" }, ["Inga DEFAULT-kolumner hittades i FixedTables.PRODUCT."]));
+        return;
       }
 
       // In-memory draft state (so Notes won't persist until Save)
@@ -4406,7 +4436,7 @@ const role = App.role(state);
       };
 
       const table = el("table", { class:"table", style:"margin-top:12px;" }, []);
-      table.appendChild(el("thead", {}, [el("tr", {}, headers.map(h => el("th", {}, [h])).concat([el("th", { style:"text-align:right;" }, ["Save"])]))]));
+      table.appendChild(el("thead", {}, [el("tr", {}, cols.map(c => el("th", {}, [c.label])).concat([el("th", { style:"text-align:right;" }, ["Save"])]))]));
 
       const saveBtn = el("button", {
         class: "btn btn-primary",

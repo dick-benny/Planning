@@ -103,8 +103,8 @@
 
     el.addEventListener("click", open);
     el.oncontextmenu = function (e) { open(e); return false; };
-    el.addEventListener("pointerdown", function (e) {
-      try { if (!e || e.button !== 2) return; open(e); } catch (e2) {}
+    el.addEventListener("mouseup", function (e) {
+      try { if (!e || e.button !== 2 || e.defaultPrevented) return; open(e); } catch (e2) {}
     });
   };
 })();
