@@ -782,16 +782,37 @@ st.schemas[tabKey] = res.schema;
       };
     }
 
-    function _isMineRow(row, me) {
+    function _matchesUserRow(row, who) {
       const s = _rowOwnerSignals(row);
-      if (me.meId && (s.createdById === me.meId || s.owner === me.meId)) return true;
-      if (me.meEmail && s.createdByEmail && _lower(s.createdByEmail) === _lower(me.meEmail)) return true;
-      if (me.meInitials) {
-        if (s.createdByInitials && _lower(s.createdByInitials) === _lower(me.meInitials)) return true;
+      if (who && who.meId && (s.createdById === who.meId || s.owner === who.meId)) return true;
+      if (who && who.meEmail && s.createdByEmail && _lower(s.createdByEmail) === _lower(who.meEmail)) return true;
+      if (who && who.meInitials) {
+        if (s.createdByInitials && _lower(s.createdByInitials) === _lower(who.meInitials)) return true;
         // last resort: description initials (legacy / editor-generated)
-        if (s.descInitials && _lower(s.descInitials) === _lower(me.meInitials)) return true;
+        if (s.descInitials && _lower(s.descInitials) === _lower(who.meInitials)) return true;
       }
       return false;
+    }
+
+    function _isMineRow(row, me) {
+      return _matchesUserRow(row, me);
+    }
+
+    function _getTodoFilterUser(st) {
+      try {
+        const userId = _normStr(st && st.session && st.session.todoUserFilterId);
+        if (!userId) return null;
+        const users = (st && st.settings && Array.isArray(st.settings.users)) ? st.settings.users : [];
+        const hit = users.find(u => u && String(u.id) === userId) || null;
+        if (!hit) return null;
+        return {
+          meId: _normStr(hit.id),
+          meInitials: _normStr(hit.initials || hit.Initials),
+          meEmail: _normStr(hit.email || hit.Email)
+        };
+      } catch (e) {
+        return null;
+      }
     }
 
     function _isPrivateTodo(row) {
@@ -814,18 +835,29 @@ st.schemas[tabKey] = res.schema;
 
       const me = _getMe(st);
       const onlyMine = !!(st && st.session && st.session.todoOnlyMine);
+      const filterUser = _getTodoFilterUser(st);
 
       let out = rows;
 
       // Always enforce private visibility
       out = out.filter(r => !_isPrivateTodo(r) || _isMineRow(r, me));
 
+      // USER-filter: selected user's ToDos, but never private rows
+      if (filterUser) out = out.filter(r => !_isPrivateTodo(r) && _matchesUserRow(r, filterUser));
+
       // Apply "Mina ToDo" when enabled
       if (onlyMine) out = out.filter(r => _isMineRow(r, me));
 
       if (_dbgEnabled()) {
         try {
-          console.log("[App.listRows][TODO] filtered", { before: rows.length, after: out.length, onlyMine, meId: me.meId, meInitials: me.meInitials });
+          console.log("[App.listRows][TODO] filtered", {
+            before: rows.length,
+            after: out.length,
+            onlyMine,
+            filterUserId: filterUser && filterUser.meId,
+            meId: me.meId,
+            meInitials: me.meInitials
+          });
         } catch (e) {}
       }
       return out;

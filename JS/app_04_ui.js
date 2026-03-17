@@ -1587,31 +1587,71 @@ function isOverdueDate(val) {
       rowName = (row && row.fields && firstCol) ? String(row.fields[firstCol] || "").trim() : "";
     }catch(e){}
 
-    // Route legacy callers into the same Notes UI as DEV/PRODUCT.
+    closeAnyModal();
+
+    const colTitle = String(displayField || fieldName || "Anteckning");
+    const parts = [tableTitleForTab(tabKey)];
+    if (rowName) parts.push(rowName);
+    parts.push(colTitle);
+    const title = parts.join(" – ");
+
+    // Existing notes log
     const existingLog = readNotesLog((row && row.fields) ? row.fields : {}, fieldName);
-    const onSave = function(nextLog){
-      try{
-        const st = (typeof App.getState === "function") ? App.getState() : null;
-        const cur = getRowSafe(tabKey, rowId, st) || row;
-        if (!cur) return;
 
-        const nextRow = Object.assign({}, cur, {
-          updatedAt: new Date().toISOString(),
-          fields: Object.assign({}, cur.fields || {})
-        });
+    const overlay = el("div", { class: "usp-modal-overlay" }, []);
+    const modal = el("div", { class: "usp-modal" }, []);
+    const h = el("div", { class: "modal-title" }, [title]);
 
-        const log = Array.isArray(nextLog) ? nextLog : [];
-        writeNotesLog(nextRow.fields, fieldName, log);
+    const existing = el("div", { class: "modal-notes-existing" }, []);
+    if (existingLog && existingLog.length) {
+      existing.appendChild(el("div", { class:"modal-notes-label" }, ["Befintliga anteckningar:"]));
+      existing.appendChild(el("pre", { class:"modal-notes-pre" }, [formatNotesLog(existingLog)]));
+    }
 
-        if (typeof App.upsertRow === "function") App.upsertRow(tabKey, nextRow);
-      }catch(e){}
-    };
+    const ta = el("textarea", { class:"modal-textarea", rows:"5", placeholder:"Skriv anteckning..." }, []);
 
-    return openNotesModal(tabKey, fieldName, existingLog, onSave, {
-      rowId: rowId,
-      rowName: rowName,
-      label: String(displayField || fieldName || "Anteckning")
+    const actions = el("div", { class: "modal-actions" }, []);
+    const btnCancel = el("button", { class:"btn", type:"button" }, ["Cancel"]);
+    const btnSave = el("button", { class:"btn", type:"button" }, ["Save"]);
+
+    btnCancel.addEventListener("click", function(){ overlay.remove(); });
+
+    btnSave.addEventListener("click", function(){
+      const t = String(ta.value || "").trim();
+      if (!t) { overlay.remove(); return; }
+
+      const st = (typeof App.getState === "function") ? App.getState() : null;
+      const cur = getRowSafe(tabKey, rowId, st) || row;
+      if (!cur) { overlay.remove(); return; }
+
+      const nextRow = Object.assign({}, cur, {
+        updatedAt: new Date().toISOString(),
+        fields: Object.assign({}, cur.fields || {})
+      });
+
+      const log = readNotesLog(nextRow.fields, fieldName);
+      log.push({ ts: new Date().toISOString(), by: currentInitials(), text: t });
+      writeNotesLog(nextRow.fields, fieldName, log);
+
+      if (typeof App.upsertRow === "function") App.upsertRow(tabKey, nextRow);
+      overlay.remove();
     });
+
+    actions.appendChild(btnCancel);
+    actions.appendChild(btnSave);
+
+    modal.appendChild(h);
+    if (existingLog && existingLog.length) modal.appendChild(existing);
+    modal.appendChild(ta);
+    modal.appendChild(actions);
+    overlay.appendChild(modal);
+
+    overlay.addEventListener("click", function(e){
+      if (e && e.target === overlay) overlay.remove();
+    });
+
+    document.body.appendChild(overlay);
+    try { ta.focus(); } catch(e) {}
   }
 
 
@@ -3724,6 +3764,7 @@ function todoView(state) {
     st2.session.__todoFilterInitDone = true;
     if (!st2.session.todoFilterCat) st2.session.todoFilterCat = "Alla";
     if (st2.session.todoOnlyMine == null) st2.session.todoOnlyMine = false;
+    if (st2.session.todoUserFilterId == null) st2.session.todoUserFilterId = "";
     App.commitState(st2);
     return;
   }
@@ -3734,6 +3775,8 @@ function todoView(state) {
   const session = (st && st.session) ? st.session : {};
   const filterCat = String(session.todoFilterCat || "Alla");
   const onlyMine = !!session.todoOnlyMine;
+  const userFilterId = String(session.todoUserFilterId || "");
+  const isAdminTodo = String(App.role ? App.role(st) : "").toLowerCase() === "admin";
 
   // Logged in initials (for Private rule in TableUI)
   let meIni = "";
@@ -3762,22 +3805,82 @@ function todoView(state) {
     filterSelect
   ]);
 
+  const todoUsers = (() => {
+    try {
+      const all = (App.listUsers && typeof App.listUsers === "function") ? (App.listUsers(st) || []) : [];
+      const seen = {};
+      return all.filter(u => {
+        const id = String((u && u.id) || "").trim();
+        if (!id || seen[id]) return false;
+        seen[id] = true;
+        return true;
+      });
+    } catch(e) { return []; }
+  })();
+
+  const userFilterSelect = el("select", {
+    class:"input",
+    style:"min-width:170px;",
+    onchange: (ev) => {
+      const v = String(ev.target.value || "");
+      const s0 = App.getState();
+      const s2 = (App.cloneState ? App.cloneState(s0) : JSON.parse(JSON.stringify(s0)));
+      s2.session = s2.session || {};
+      s2.session.todoUserFilterId = v;
+      s2.session.todoOnlyMine = false;
+      App.commitState(s2);
+    }
+  }, [
+    el("option", { value:"" }, ["Välj användare"])
+  ].concat(todoUsers.map(u => {
+    const ini = computeInitials(u) || "";
+    const label = String((u && u.name) || (u && u.email) || ini || "User");
+    const txt = ini ? (ini + " • " + label) : label;
+    return el("option", { value: String((u && u.id) || "") }, [txt]);
+  })));
+  try { userFilterSelect.value = userFilterId; } catch(e) {}
+
   const btnMineClass = btnClass("secondary") + (onlyMine ? " btn-mine-active" : "");
-  const heroButtons = [
+  const btnUserClass = btnClass("secondary") + (userFilterId ? " btn-mine-active" : "");
+  const heroButtons = [];
+  if (isAdminTodo) {
+    heroButtons.push(
+      el("button", { class: btnUserClass, type:"button", onclick: () => {
+        const s0 = App.getState();
+        const s2 = (App.cloneState ? App.cloneState(s0) : JSON.parse(JSON.stringify(s0)));
+        s2.session = s2.session || {};
+        if (String(s2.session.todoUserFilterId || "")) {
+          s2.session.todoUserFilterId = "";
+        } else {
+          const firstUser = (todoUsers && todoUsers.length) ? String((todoUsers[0] && todoUsers[0].id) || "") : "";
+          s2.session.todoUserFilterId = firstUser;
+          s2.session.todoOnlyMine = false;
+        }
+        App.commitState(s2);
+      }}, ["USER"])
+    );
+    heroButtons.push(userFilterSelect);
+  }
+  heroButtons.push(
     el("button", { class: btnMineClass, type:"button", onclick: () => {
       const s0 = App.getState();
       const s2 = (App.cloneState ? App.cloneState(s0) : JSON.parse(JSON.stringify(s0)));
       s2.session = s2.session || {};
       s2.session.todoOnlyMine = !onlyMine;
+      if (s2.session.todoOnlyMine) s2.session.todoUserFilterId = "";
       App.commitState(s2);
-    }}, ["Mina ToDo"]),
+    }}, ["Mina ToDo"])
+  );
+  heroButtons.push(
     el("button", { class: btnClass("primary"), type:"button", onclick: () => {
       openRowModal(tabKey, { todoNew: true, title: "Ny ToDo" });
-    }}, ["Ny ToDo"]),
+    }}, ["Ny ToDo"])
+  );
+  heroButtons.push(
     el("button", { class: btnClass("secondary"), type:"button", onclick: () => {
       openArchiveModal(App.getState(), tabKey, title);
     }}, ["Arkiv"])
-  ];
+  );
 
   // Keep the week badge like before (pure UI)
   let weekNo = "";
